@@ -191,4 +191,14 @@ ifconfig
 
 sudo ip route replace 192.168.1.100/32 dev enxe466e5832575(对应网口编号) src 192.168.1.xxx(对应设置的本机ip)
 sudo ip neigh flush to 192.168.1.100
+
+
+for RDK_X5
+
+  sudo ip addr add 192.168.1.20/24 dev eth0
+  sudo ip route replace 192.168.1.100/32 dev eth0 src 192.168.1.20
+  sudo ip route replace 192.168.1.101/32 dev eth0 src 192.168.1.20
+  sudo ip neigh flush to 192.168.1.100
+  sudo ip neigh flush to 192.168.1.101
 ```
+
