@@ -169,7 +169,92 @@ asyncio.run(main())
 PY
 ```
 
-## Glove 控制 Hand
+## Socket 分离模式：Glove 端 + Hand 端
+
+分离后有两个进程：
+
+- `glove_client.py`：运行在连接 Wuji Glove 的机器上，只读取手套并通过 TCP 发送关节角；
+- `hand_server.py`：运行在连接 Wuji Hand 的机器上，监听 TCP，完成 neutral 标定、增益/限幅/置信度/速度限制，并控制机械手。
+
+建议先启动 Hand 端，再启动 Glove 端。两端可以在同一台机器，也可以在同一局域网内的两台机器。
+
+### 1. 启动 Hand 端
+
+先 dry-run，只接收 socket 数据并打印目标，不会使能或移动 Wuji Hand：
+
+```bash
+conda run -n wuji python /home/user/workspace/wuji/hand_server.py \
+  --bind-host 0.0.0.0 \
+  --port 8765 \
+  --duration 10 \
+  --rate 60 \
+  --gain -1.5 \
+  --max-delta 1.2 \
+  --diagnostics
+```
+
+确认接收和映射正常后，再添加 `--enable-hand` 实际控制 Wuji Hand。第一次运行建议保守参数：
+
+```bash
+conda run -n wuji python /home/user/workspace/wuji/hand_server.py \
+  --bind-host 0.0.0.0 \
+  --port 8765 \
+  --enable-hand \
+  --duration 10 \
+  --rate 60 \
+  --lowpass 15 \
+  --gain 0.4 \
+  --max-delta 0.25
+```
+
+也可以直接修改并运行：
+
+```bash
+bash /home/user/workspace/wuji/teleop_hand_server.sh
+```
+
+### 2. 启动 Glove 端
+
+如果两端在同一台机器：
+
+```bash
+conda run -n wuji python /home/user/workspace/wuji/glove_client.py \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --glove-name glove_0 \
+  --duration 10 \
+  --rate 60 \
+  --diagnostics
+```
+
+如果 Glove 端和 Hand 端在不同机器，把 `--host` 改成 Hand 端机器的 IP，例如：
+
+```bash
+conda run -n wuji python /home/user/workspace/wuji/glove_client.py \
+  --host 192.168.1.20 \
+  --port 8765 \
+  --glove-name glove_0 \
+  --duration 10 \
+  --rate 60 \
+  --diagnostics
+```
+
+也可以修改 `teleop_glove_client.sh` 里的 `HAND_SERVER_HOST` 后运行：
+
+```bash
+bash /home/user/workspace/wuji/teleop_glove_client.sh
+```
+
+Socket 协议是 JSON Lines，每行一帧，包含：
+
+- `angles`：5×4 关节角矩阵；
+- `confidence`：5 个手指的 IK confidence；
+- `seq`：Glove 端递增帧号；
+- `timestamp`：Glove 端发送时间。
+
+Hand 端会丢弃 socket 队列里的旧帧并使用最新帧，日志中的 `dropped_socket` 表示为避免延迟而跳过的旧帧数。
+
+## 旧版单进程模式：Glove 控制 Hand
 
 先 dry-run，只读取 glove 并打印目标，不会使能或移动 Wuji Hand：
 
@@ -240,4 +325,3 @@ conda run -n wuji python /home/user/workspace/wuji/glove_to_hand.py \
   --home-duration 6 \
   --diagnostics
 ```
-
