@@ -171,73 +171,24 @@ PY
 
 ## Glove 控制 Hand
 
-先 dry-run，只读取 glove 并打印目标，不会使能或移动 Wuji Hand：
-
 ```bash
-conda run -n wuji python /home/user/workspace/wuji/glove_to_hand.py --duration 10 --rate 10
+机器人
+cd glove_to_hand
+bash teleop_dual_server.sh
+
+主机
+cd glove_to_hand
+bash teleop_dual_client.sh
 ```
 
-确认输出会随手套动作变化后，再实际控制 Wuji Hand。第一次运行建议使用保守参数：
 
+### 设置连接网口
 ```bash
-conda run -n wuji python /home/user/workspace/wuji/glove_to_hand.py \
-  --enable-hand \
-  --duration 10 \
-  --rate 60 \
-  --lowpass 15 \
-  --gain 0.4 \
-  --max-delta 0.25
+ip route get 192.168.1.100
+ip route get 192.168.1.101
+
+ifconfig
+
+sudo ip route replace 192.168.1.100/32 dev enxe466e5832575(对应网口编号) src 192.168.1.xxx(对应设置的本机ip)
+sudo ip neigh flush to 192.168.1.100
 ```
-
-运行前注意：
-
-- `--enable-hand` 模式默认会先把 Wuji Hand 按 `--home-duration` 平滑插值回到 0 位，再开始跟随 glove；
-- 程序正常结束或按一次 `Ctrl-C` 退出时，也会按 `--home-duration` 平滑插值回到 0 位，再失能关节；
-- 按 `Ctrl-C` 后请等待回零完成，不要连续多次按，否则 Python 进程可能被强制中断，来不及回零；
-- 如果不想启动/退出时归零，添加 `--no-home-on-start`；
-- Wuji Hand 周围不要有障碍物；
-- 准备好按 `Ctrl-C` 停止；
-- 启动时保持 glove 自然张开姿态，脚本会把启动姿态作为 neutral；
-- 输出里的 `dropped` 表示脚本丢弃了多少个旧 glove 帧；大于 0 是正常的，代表控制使用的是最新帧而不是排队旧帧；
-- 如果仍感觉有滤波滞后，可继续提高 `--lowpass`，例如 `--lowpass 20`；如果抖动明显，再降低；
-- 四指 J1 侧摆/外展默认会反向修正；如果不需要，添加 `--no-invert-side-sway`；
-- `--max-velocity` 限制每个关节目标变化速度，可避免追踪恢复时突然跳到某个角度；
-- 可以用 `--joint-gains` 和 `--joint-max-deltas` 单独调整每个关节；
-- 如果方向和幅度正常，再逐步增大 `--gain` 和 `--max-delta`。
-
-### 逐关节调参
-
-`--gain` 和 `--max-delta` 是全局默认值。若要单独调整每个关节，使用：
-
-```bash
---joint-gains "20个逗号分隔的数"
---joint-max-deltas "20个逗号分隔的数"
-```
-
-顺序是 5×4 矩阵的 row-major：
-
-```text
-thumb_j0, thumb_j1, thumb_j2, thumb_j3,
-index_j0, index_j1, index_j2, index_j3,
-middle_j0, middle_j1, middle_j2, middle_j3,
-ring_j0, ring_j1, ring_j2, ring_j3,
-pinky_j0, pinky_j1, pinky_j2, pinky_j3
-```
-
-例如：四指 J1 侧摆幅度减半、主要弯曲关节保留较大增益：
-
-```bash
-conda run -n wuji python /home/user/workspace/wuji/glove_to_hand.py \
-  --enable-hand \
-  --duration 30 \
-  --rate 30 \
-  --lowpass 10 \
-  --gain -0.8 \
-  --max-delta 0.45 \
-  --joint-gains "-0.8,-0.8,-0.8,-0.8, -0.8,-0.4,-0.8,-0.8, -0.8,-0.4,-0.8,-0.8, -0.8,-0.4,-0.8,-0.8, -0.8,-0.4,-0.8,-0.8" \
-  --joint-max-deltas "0.45,0.45,0.45,0.45, 0.45,0.20,0.45,0.45, 0.45,0.20,0.45,0.45, 0.45,0.20,0.45,0.45, 0.45,0.20,0.45,0.45" \
-  --confidence-threshold 0.3 \
-  --home-duration 6 \
-  --diagnostics
-```
-

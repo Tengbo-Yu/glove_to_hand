@@ -5,8 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # IP address(es) of the machine(s) running the hand servers.
 # When the hands are on the same machine, both hosts are the same IP.
-LEFT_HAND_SERVER_HOST="127.0.0.1"
-RIGHT_HAND_SERVER_HOST="127.0.0.1"
+# Use 127.0.0.1 only when the dual clients and dual servers run on this same machine.
+LEFT_HAND_SERVER_HOST="192.168.123.164"
+RIGHT_HAND_SERVER_HOST="192.168.123.164"
 LEFT_PORT="8765"
 RIGHT_PORT="8766"
 
@@ -15,8 +16,10 @@ LEFT_GLOVE_NAME="glove_l"
 RIGHT_GLOVE_NAME="glove_r"
 
 # Fill these if multiple Wuji gloves are online. Leave empty to auto-connect.
-LEFT_GLOVE_SN=""
-RIGHT_GLOVE_SN=""
+# LEFT_GLOVE_SN="WG1KA03260512012"
+RIGHT_GLOVE_SN="WG1KA03260512012"
+# RIGHT_GLOVE_SN="WG1JA03260517019"
+LEFT_GLOVE_SN="WG1JA03260517019"
 
 pids=()
 cleanup() {

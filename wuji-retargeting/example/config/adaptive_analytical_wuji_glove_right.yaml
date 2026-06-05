@@ -5,7 +5,7 @@
 
 optimizer:
   type: "AdaptiveOptimizerAnalytical"
-
+  urdf_path: ../../../wuji-description/hand/body/urdf/right.urdf
 retarget:
   huber_delta: 2.0
   huber_delta_dir: 0.5

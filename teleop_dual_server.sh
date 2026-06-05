@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Fill these if multiple hands are connected. Leave empty to let wujihandpy auto-select.
-LEFT_HAND_SERIAL=""
-RIGHT_HAND_SERIAL=""
+LEFT_HAND_SERIAL="3378387C3233"
+RIGHT_HAND_SERIAL="3378387E3233"
 
 # One server per hand, each on its own port. Clients must use the matching ports.
 LEFT_PORT="8765"
@@ -25,7 +25,7 @@ start_server() {
   local port="$1"
   local serial="$2"
   local cmd=(
-    conda run -n wuji python "$SCRIPT_DIR/hand_qpos_server.py"
+    python "$SCRIPT_DIR/hand_qpos_server.py"
     --bind-host 0.0.0.0
     --port "$port"
     --enable-hand

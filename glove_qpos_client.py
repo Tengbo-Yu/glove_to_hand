@@ -37,7 +37,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Read a Wuji Glove, retarget to hand joints, and stream qpos to a hand server over TCP."
     )
-    parser.add_argument("--host", default="127.0.0.1", help="hand_qpos_server host/IP.")
+    parser.add_argument("--host", default="192.168.123.164", help="hand_qpos_server host/IP.")
     parser.add_argument("--port", type=int, default=8765, help="hand_qpos_server TCP port.")
     parser.add_argument("--hand", default="right", choices=("left", "right"), help="Glove/hand side.")
     parser.add_argument("--glove-sn", default="", help="Wuji Glove serial number. Use when multiple Wuji devices are online.")
@@ -86,7 +86,8 @@ def run(args):
 
     sock = None
     stop_requested = False
-
+    print("retargeter")
+    # breakpoint()
     def request_stop(signum, frame):
         nonlocal stop_requested
         stop_requested = True
@@ -96,6 +97,7 @@ def run(args):
 
     try:
         sock = open_socket(args.host, args.port, args.connect_timeout)
+        print('----- hello ')
         sock.sendall(encode_message(make_hello_message(args.hand, time.time())))
         print(f"Streaming retargeted qpos to {args.host}:{args.port}")
 
@@ -113,6 +115,7 @@ def run(args):
                 continue
 
             qpos = retargeter.retarget(fingers_pose).reshape(5, 4)
+            print(qpos)
             sock.sendall(encode_message(make_qpos_message(seq, qpos, time.time())))
             seq += 1
 

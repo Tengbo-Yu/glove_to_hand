@@ -59,21 +59,29 @@ def read_latest_qpos(reader):
     """
     message = None
     dropped = 0
-    while True:
-        line = reader.read_line()
+
+    def process_line(line):
+        nonlocal message, dropped
         if line is None:
-            break
+            return
         try:
             decoded = decode_message(line)
         except ValueError as exc:
             print(f"Ignoring malformed socket message: {exc}")
-            continue
+            return
         if decoded["type"] == "hello":
             print(f"Glove client hello: hand_side={decoded.get('hand_side', 'unknown')}")
-            continue
+            return
         if message is not None:
             dropped += 1
         message = decoded
+
+    process_line(reader.read_line())
+    while True:
+        line = reader.read_available_line()
+        if line is None:
+            break
+        process_line(line)
     return message, dropped
 
 

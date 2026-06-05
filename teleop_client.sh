@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # IP address of the machine running teleop_server.sh. Use 127.0.0.1 when both run locally.
-HAND_SERVER_HOST="127.0.0.1"
-HAND_SERVER_PORT="8765"
+HAND_SERVER_HOST="192.168.123.164"
+HAND_SERVER_PORT="8766"
 
 # Glove/hand side and wuji-sdk device name.
 HAND_SIDE="right"

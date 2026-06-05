@@ -24,6 +24,5 @@ conda run -n wuji python "$SCRIPT_DIR/glove_to_hand.py" \
 --duration 100 \
 --hand left \
 --home-duration 2 \
---diagnostics \
 --rate 60 \
 --lowpass 10 

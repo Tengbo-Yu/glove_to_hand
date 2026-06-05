@@ -10,7 +10,7 @@ HAND_SERIAL=""
 PORT="8765"
 
 CMD=(
-  conda run -n wuji python "$SCRIPT_DIR/hand_qpos_server.py"
+  python "$SCRIPT_DIR/hand_qpos_server.py"
   --bind-host 0.0.0.0
   --port "$PORT"
   --enable-hand
