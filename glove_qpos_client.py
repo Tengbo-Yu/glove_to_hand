@@ -1,4 +1,5 @@
 import argparse
+import os
 import signal
 import socket
 import sys
@@ -7,7 +8,15 @@ from pathlib import Path
 
 import numpy as np
 
+from data_collector_telemetry import (
+    DataCollectorTelemetryPublisher,
+    build_glove_command_payload,
+    default_endpoint,
+    default_source,
+    seconds_to_ns,
+)
 from qpos_protocol import encode_message, make_hello_message, make_qpos_message
+from qpos_protocol import PROTOCOL_NAME
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -47,6 +56,9 @@ def parse_args():
     parser.add_argument("--rate", type=float, default=30.0, help="Frame send rate in Hz.")
     parser.add_argument("--connect-timeout", type=float, default=10.0, help="Seconds to wait when connecting to the hand server.")
     parser.add_argument("--print-every", type=float, default=1.0, help="Seconds between status prints.")
+    parser.add_argument("--telemetry", action=argparse.BooleanOptionalAction, default=True, help="Publish retargeted glove command telemetry to DataCollector.")
+    parser.add_argument("--telemetry-host", default=os.environ.get("DATA_COLLECTOR_HOST", "127.0.0.1"), help="DataCollector host used for the default Wuji glove command endpoint.")
+    parser.add_argument("--telemetry-endpoint", default=None, help="Explicit DataCollector endpoint for glove command telemetry. Default is selected from --hand.")
     return parser.parse_args()
 
 
@@ -67,6 +79,18 @@ def open_socket(host, port, connect_timeout):
     return sock
 
 
+def create_glove_telemetry_publisher(args):
+    if not args.telemetry:
+        return None
+    endpoint = args.telemetry_endpoint or default_endpoint("glove_command", args.hand, args.telemetry_host)
+    source = default_source("glove_command", args.hand)
+    return DataCollectorTelemetryPublisher(
+        endpoint=endpoint,
+        source=source,
+        frame_id=source,
+    )
+
+
 def run(args):
     config_path = resolve_config(args.config, args.hand)
     if not config_path.exists():
@@ -85,6 +109,7 @@ def run(args):
     retargeter = Retargeter.from_yaml(str(config_path), args.hand)
 
     sock = None
+    telemetry = None
     stop_requested = False
     print("retargeter")
     # breakpoint()
@@ -96,6 +121,9 @@ def run(args):
     previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
 
     try:
+        telemetry = create_glove_telemetry_publisher(args)
+        if telemetry is not None:
+            print(f"Glove telemetry: {telemetry.source} -> {telemetry.endpoint}")
         sock = open_socket(args.host, args.port, args.connect_timeout)
         print('----- hello ')
         sock.sendall(encode_message(make_hello_message(args.hand, time.time())))
@@ -114,9 +142,28 @@ def run(args):
                 time.sleep(0.01)
                 continue
 
+            frame_time_s = time.time()
             qpos = retargeter.retarget(fingers_pose).reshape(5, 4)
+            if telemetry is not None:
+                payload = build_glove_command_payload(
+                    hand_side=args.hand,
+                    seq=seq,
+                    qpos=qpos,
+                    fingers_pose=fingers_pose,
+                    config_path=str(config_path),
+                    glove_device_name=args.device_name,
+                    glove_sn=args.glove_sn,
+                    tcp_target=f"{args.host}:{args.port}",
+                    protocol=PROTOCOL_NAME,
+                    telemetry_dropped_count=telemetry.dropped_count,
+                )
+                telemetry.publish(
+                    sequence=seq,
+                    payload=payload,
+                    source_timestamp_ns=seconds_to_ns(frame_time_s),
+                )
             print(qpos)
-            sock.sendall(encode_message(make_qpos_message(seq, qpos, time.time())))
+            sock.sendall(encode_message(make_qpos_message(seq, qpos, frame_time_s)))
             seq += 1
 
             now = time.monotonic()
@@ -138,6 +185,8 @@ def run(args):
             except OSError:
                 pass
             sock.close()
+        if telemetry is not None:
+            telemetry.close()
         cleanup_input_device(input_device)
         print("Stopped. Glove disconnected and socket closed.")
 

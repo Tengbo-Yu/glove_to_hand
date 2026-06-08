@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Fill this if multiple hands are connected. Leave empty to let wujihandpy auto-select.
 HAND_SERIAL=""
+HAND_SIDE="right"
+DATA_COLLECTOR_HOST="${DATA_COLLECTOR_HOST:-127.0.0.1}"
 
 # Port the glove client will connect to. Must match teleop_client.sh.
 PORT="8765"
@@ -13,10 +15,12 @@ CMD=(
   python "$SCRIPT_DIR/hand_qpos_server.py"
   --bind-host 0.0.0.0
   --port "$PORT"
+  --hand "$HAND_SIDE"
   --enable-hand
   --rate 60
   --lowpass 10
   --home-duration 2
+  --telemetry-host "$DATA_COLLECTOR_HOST"
 )
 
 if [[ -n "$HAND_SERIAL" ]]; then

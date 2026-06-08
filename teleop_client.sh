@@ -13,6 +13,7 @@ GLOVE_NAME="glove"
 
 # Fill this if multiple Wuji gloves are online. Leave empty to auto-connect.
 GLOVE_SN=""
+DATA_COLLECTOR_HOST="${DATA_COLLECTOR_HOST:-127.0.0.1}"
 
 CMD=(
   conda run -n wuji python "$SCRIPT_DIR/glove_qpos_client.py"
@@ -21,6 +22,7 @@ CMD=(
   --hand "$HAND_SIDE"
   --device-name "$GLOVE_NAME"
   --rate 60
+  --telemetry-host "$DATA_COLLECTOR_HOST"
 )
 
 if [[ -n "$GLOVE_SN" ]]; then

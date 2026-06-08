@@ -10,6 +10,7 @@ LEFT_HAND_SERVER_HOST="192.168.123.164"
 RIGHT_HAND_SERVER_HOST="192.168.123.164"
 LEFT_PORT="8765"
 RIGHT_PORT="8766"
+DATA_COLLECTOR_HOST="${DATA_COLLECTOR_HOST:-127.0.0.1}"
 
 # wuji-sdk device names for each glove.
 LEFT_GLOVE_NAME="glove_l"
@@ -44,6 +45,7 @@ start_client() {
     --hand "$side"
     --device-name "$name"
     --rate 60
+    --telemetry-host "$DATA_COLLECTOR_HOST"
   )
   if [[ -n "$sn" ]]; then
     cmd+=(--glove-sn "$sn")
