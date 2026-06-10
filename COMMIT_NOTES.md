@@ -30,6 +30,69 @@ Known limitations:
 - Missing dependencies, skipped tests, follow-up work, or intentional scope boundaries.
 ```
 
+## 2026-06-10 - Wuji hand MCAP replay client
+
+Suggested commit message:
+`feat: add Wuji hand MCAP replay client`
+
+Purpose:
+- Replay collected Wuji hand command telemetry without requiring live gloves or
+  retargeting.
+- Use the recorded hand-server command stream as the replay source so the
+  reproduced command is what the hand server actually received during
+  collection.
+- Keep replay separate from the G1 policy replay/export path.
+
+Changed files:
+- `wuji_mcap_replay_client.py`: added a standalone MCAP replay client that
+  reads `/wuji/hand/left/command` and `/wuji/hand/right/command`, extracts
+  `received_qpos_5x4`, schedules a shared left/right timeline, and sends
+  existing `glove-qpos-v1` TCP frames to `hand_qpos_server.py`.
+- `wuji_mcap_replay_client.py`: added `--timing log_time|source_time|apply_time`,
+  `--source hand_command|glove_command`, `--speed`, `--start-sec`,
+  `--duration-sec`, `--max-gap-sec`, and `--dry-run`.
+- `requirements.txt`: added `mcap==1.3.1` for replaying DataCollector MCAP
+  episodes from the `wuji` environment.
+- `.gitignore`: added `__pycache__/` so local Python bytecode cache
+  directories are not picked up by git status or accidentally committed.
+- `tests/test_wuji_mcap_replay_client.py`: added coverage for synthetic MCAP
+  hand-command extraction, `apply_time` timestamp selection, invalid qpos shape
+  rejection, timeline filtering, speed/max-gap sleep calculation, and TCP
+  `glove-qpos-v1` message output.
+- `README.md`: documented the dry-run-first replay workflow and short
+  `--duration-sec 5` hardware smoke flow.
+- `COMMIT_NOTES.md`: recorded this replay client entry.
+
+Runtime or data-flow notes:
+- Default replay source is `hand_command`, not `glove_command`.
+- `hand_command` reads `received_qpos_5x4` from:
+  `/wuji/hand/left/command` and `/wuji/hand/right/command`.
+- `glove_command` fallback reads `retargeted_qpos_5x4` from:
+  `/wuji/glove/left/command` and `/wuji/glove/right/command`.
+- Default timing is MCAP `message.log_time`, which gives a shared left/right
+  collector timeline. `source_time` uses MCAP `publish_time`, and `apply_time`
+  uses payload `apply_timestamp_ns`.
+- Default TCP targets are left `127.0.0.1:8765` and right `127.0.0.1:8766`.
+- Client `--dry-run` opens no sockets. Real motion still requires starting
+  `hand_qpos_server.py` with `--enable-hand`; server dry-run is the first
+  replay validation step.
+
+Verification:
+- RED check before implementation:
+  `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/home/delta/workspace/glove_to_hand conda run -n data_collector python -B -m unittest discover -s /home/delta/workspace/glove_to_hand/tests -p 'test_wuji_mcap_replay_client.py' -v`
+  failed because `wuji_mcap_replay_client` did not exist.
+- Final `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/home/delta/workspace/glove_to_hand conda run -n data_collector python -B -m unittest discover -s /home/delta/workspace/glove_to_hand/tests -p 'test_wuji_mcap_replay_client.py' -v`
+  passed with 6 tests.
+- Final `git diff --check` passed with no whitespace errors.
+
+Known limitations:
+- Hardware replay was not run during implementation.
+- The `wuji` environment must run `conda run -n wuji pip install -r requirements.txt`
+  before using the replay client because `mcap`, `msgpack`, and `pyzmq` are
+  runtime dependencies.
+- This replay path sends hand joint targets only. It does not replay G1 body
+  policy state, LeRobot rows, or `/wuji/hand/*/state` as control input.
+
 ## 2026-06-08 - DataCollector telemetry publisher for Wuji glove and hand
 
 Suggested commit message:

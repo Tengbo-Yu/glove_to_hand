@@ -181,6 +181,55 @@ cd glove_to_hand
 bash teleop_dual_client.sh
 ```
 
+## MCAP Replay 到 Wuji Hand
+
+DataCollector 采集到 `/wuji/hand/left/command` 和
+`/wuji/hand/right/command` 后，可以不连接手套，直接把 MCAP 里的
+`received_qpos_5x4` 重新发给 `hand_qpos_server.py`。
+
+先安装 replay 依赖：
+
+```bash
+cd /home/delta/workspace/glove_to_hand
+conda run -n wuji pip install -r requirements.txt
+```
+
+先启动 hand server dry-run，不加 `--enable-hand`：
+
+```bash
+cd /home/delta/workspace/glove_to_hand
+conda run -n wuji python hand_qpos_server.py --hand left --port 8765 --no-telemetry
+```
+
+另一个终端启动右手 dry-run：
+
+```bash
+cd /home/delta/workspace/glove_to_hand
+conda run -n wuji python hand_qpos_server.py --hand right --port 8766 --no-telemetry
+```
+
+先只检查 MCAP，不发 TCP：
+
+```bash
+cd /home/delta/workspace/glove_to_hand
+conda run -n wuji python wuji_mcap_replay_client.py \
+  /home/delta/workspace/DataCollector/data_collector/datasets/<data_name>/episode_XXXXXX/episode.mcap \
+  --dry-run
+```
+
+确认帧数和左右手时间轴正常后，再发给 dry-run server：
+
+```bash
+cd /home/delta/workspace/glove_to_hand
+conda run -n wuji python wuji_mcap_replay_client.py \
+  /home/delta/workspace/DataCollector/data_collector/datasets/<data_name>/episode_XXXXXX/episode.mcap \
+  --duration-sec 5
+```
+
+确认 dry-run server 打印 `recv=` 后，才重启 server 加 `--enable-hand`
+做短时间实机 replay。默认 replay 源是 hand server 实际收到的
+`hand_command`；如需诊断 retarget 生成端，可加 `--source glove_command`。
+
 
 ### 设置连接网口
 ```bash
