@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from qpos_protocol import encode_message, make_hello_message, make_qpos_message
+from qpos_protocol import encode_message, make_hello_message, make_keypoints_message, make_qpos_message
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -21,7 +21,7 @@ for path in (RETARGETING_ROOT, RETARGETING_EXAMPLE):
         sys.path.insert(0, path_str)
 
 from input_devices.wuji_glove_device import WujiGloveDevice
-from wuji_retargeting import Retargeter
+
 
 
 def resolve_config(config, hand_side):
@@ -70,6 +70,8 @@ class IntervalStats:
 
 
 def optimizer_timing_summary(retargeter):
+    if retargeter is None:
+        return ""
     optimizer = getattr(retargeter, "optimizer", None)
     if optimizer is None or not hasattr(optimizer, "get_timing_stats"):
         return ""
@@ -119,7 +121,8 @@ def parse_args():
     parser.add_argument("--hand", default="right", choices=("left", "right"), help="Glove/hand side.")
     parser.add_argument("--glove-sn", default="", help="Wuji Glove serial number. Use when multiple Wuji devices are online.")
     parser.add_argument("--device-name", default="glove", help="wuji_sdk device name for Wuji Glove.")
-    parser.add_argument("--config", default=None, help="Retargeting YAML config path.")
+    parser.add_argument("--config", default=None, help="Retargeting YAML config path. Used only when --stream-mode=qpos.")
+    parser.add_argument("--stream-mode", choices=("keypoints", "qpos"), default="keypoints", help="Send raw glove keypoints for robot-side retargeting, or retarget locally and send qpos.")
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Frame send rate in Hz.")
     parser.add_argument("--connect-timeout", type=float, default=10.0, help="Seconds to wait when connecting to the hand server.")
@@ -149,11 +152,15 @@ def open_socket(host, port, connect_timeout):
 
 
 def run(args):
-    config_path = resolve_config(args.config, args.hand)
-    if not config_path.exists():
+    config_path = resolve_config(args.config, args.hand) if args.stream_mode == "qpos" else None
+    if config_path is not None and not config_path.exists():
         raise FileNotFoundError(f"Retargeting config not found: {config_path}")
 
-    print(f"Config: {config_path}")
+    if config_path is not None:
+        print(f"Config: {config_path}")
+    else:
+        print("Config: robot-side retargeting (--stream-mode=keypoints)")
+    print(f"Stream mode: {args.stream_mode}")
     print(f"Hand side: {args.hand}")
     print(f"Glove device name: {args.device_name}")
     print(f"Hand server: {args.host}:{args.port}")
@@ -163,12 +170,13 @@ def run(args):
         device_name=args.device_name,
         sn=args.glove_sn or None,
     )
-    retargeter = Retargeter.from_yaml(str(config_path), args.hand)
+    retargeter = None
+    if config_path is not None:
+        from wuji_retargeting import Retargeter
+        retargeter = Retargeter.from_yaml(str(config_path), args.hand)
 
     sock = None
     stop_requested = False
-    print("retargeter")
-    # breakpoint()
     def request_stop(signum, frame):
         nonlocal stop_requested
         stop_requested = True
@@ -182,7 +190,7 @@ def run(args):
             sock.settimeout(args.send_timeout)
         print('----- hello ')
         sock.sendall(encode_message(make_hello_message(args.hand, time.time())))
-        print(f"Streaming retargeted qpos to {args.host}:{args.port}")
+        print(f"Streaming {args.stream_mode} frames to {args.host}:{args.port}")
 
         interval = 1.0 / args.rate
         interval_ms = interval * 1000.0
@@ -222,12 +230,15 @@ def run(args):
                 time.sleep(0.01)
                 continue
 
-            retarget_start = time.perf_counter()
-            qpos = retargeter.retarget(fingers_pose).reshape(5, 4)
-            retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
-            stats.add("retarget_ms", retarget_ms)
-            if args.print_qpos:
-                print(qpos)
+            retarget_ms = 0.0
+            qpos = None
+            if args.stream_mode == "qpos":
+                retarget_start = time.perf_counter()
+                qpos = retargeter.retarget(fingers_pose).reshape(5, 4)
+                retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
+                stats.add("retarget_ms", retarget_ms)
+                if args.print_qpos:
+                    print(qpos)
 
             debug_payload = None
             if args.debug_latency:
@@ -240,7 +251,11 @@ def run(args):
                 }
 
             encode_start = time.perf_counter()
-            payload = encode_message(make_qpos_message(seq, qpos, time.time(), debug=debug_payload))
+            if args.stream_mode == "qpos":
+                message = make_qpos_message(seq, qpos, time.time(), debug=debug_payload)
+            else:
+                message = make_keypoints_message(seq, fingers_pose, time.time(), args.hand, debug=debug_payload)
+            payload = encode_message(message)
             encode_ms = (time.perf_counter() - encode_start) * 1000.0
             stats.add("encode_ms", encode_ms)
 
@@ -291,11 +306,18 @@ def run(args):
                     report_start = now
                     reset_optimizer_timing(retargeter)
                 else:
-                    print(
-                        f"sent={seq} "
-                        f"thumb={np.round(qpos[0], 3).tolist()} "
-                        f"index={np.round(qpos[1], 3).tolist()}"
-                    )
+                    if qpos is not None:
+                        print(
+                            f"sent={seq} "
+                            f"thumb={np.round(qpos[0], 3).tolist()} "
+                            f"index={np.round(qpos[1], 3).tolist()}"
+                        )
+                    else:
+                        print(
+                            f"sent={seq} keypoints "
+                            f"wrist={np.round(fingers_pose[0], 3).tolist()} "
+                            f"index_tip={np.round(fingers_pose[8], 3).tolist()}"
+                        )
                 last_print = now
 
             time.sleep(interval)

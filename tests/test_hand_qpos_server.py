@@ -5,7 +5,14 @@ import unittest
 import numpy as np
 
 from hand_qpos_server import read_latest_qpos
-from qpos_protocol import SocketLineReader, decode_message, encode_message, make_hello_message, make_qpos_message
+from qpos_protocol import (
+    SocketLineReader,
+    decode_message,
+    encode_message,
+    make_hello_message,
+    make_keypoints_message,
+    make_qpos_message,
+)
 
 
 class ReadLatestQposTest(unittest.TestCase):
@@ -68,6 +75,22 @@ class ProtocolDebugTest(unittest.TestCase):
         self.assertEqual(decoded["seq"], 7)
         self.assertEqual(decoded["debug"]["client_retarget_ms"], 4.2)
         self.assertEqual(decoded["debug"]["client_sdk_drained"], 3)
+    def test_keypoints_metadata_round_trips(self):
+        keypoints = np.ones((21, 3), dtype=np.float64)
+        message = make_keypoints_message(
+            8,
+            keypoints,
+            456.0,
+            "left",
+            debug={"client_glove_ms": 0.2},
+        )
+        decoded = decode_message(encode_message(message))
+
+        self.assertEqual(decoded["type"], "keypoints_frame")
+        self.assertEqual(decoded["seq"], 8)
+        self.assertEqual(decoded["hand_side"], "left")
+        self.assertEqual(decoded["keypoints"].shape, (21, 3))
+        self.assertEqual(decoded["debug"]["client_glove_ms"], 0.2)
 
 
 if __name__ == "__main__":

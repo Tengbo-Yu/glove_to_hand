@@ -1,8 +1,8 @@
 """Newline-delimited JSON TCP protocol shared by the glove client and hand server.
 
-The glove client performs retargeting and streams ready-to-apply (5, 4) joint
-targets (qpos). The hand server only writes those targets to the hand, so it
-needs neither wuji-retargeting nor the glove SDK.
+The protocol supports two frame payloads:
+- ready-to-apply hand joint targets (qpos, shape ``(5, 4)``)
+- raw Wuji glove keypoints (shape ``(21, 3)``) for robot-side retargeting
 """
 
 import json
@@ -13,6 +13,7 @@ import numpy as np
 
 PROTOCOL_NAME = "glove-qpos-v1"
 JOINT_MATRIX_SHAPE = (5, 4)
+KEYPOINTS_SHAPE = (21, 3)
 
 
 def make_hello_message(hand_side, sent_at):
@@ -40,6 +41,23 @@ def make_qpos_message(seq, qpos, timestamp, debug=None):
     return message
 
 
+def make_keypoints_message(seq, keypoints, timestamp, hand_side, debug=None):
+    keypoints = np.asarray(keypoints, dtype=np.float64)
+    if keypoints.shape != KEYPOINTS_SHAPE:
+        raise ValueError(f"keypoints must have shape {KEYPOINTS_SHAPE}, got {keypoints.shape}")
+    message = {
+        "type": "keypoints_frame",
+        "protocol": PROTOCOL_NAME,
+        "seq": int(seq),
+        "timestamp": float(timestamp),
+        "hand_side": hand_side,
+        "keypoints": keypoints.tolist(),
+    }
+    if debug is not None:
+        message["debug"] = debug
+    return message
+
+
 def encode_message(message):
     return (json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -58,13 +76,19 @@ def decode_message(line):
     message_type = message.get("type")
     if message_type == "hello":
         return message
-    if message_type != "frame":
+    if message_type == "frame":
+        qpos = np.asarray(message.get("qpos"), dtype=np.float64)
+        if qpos.shape != JOINT_MATRIX_SHAPE:
+            raise ValueError(f"qpos must have shape {JOINT_MATRIX_SHAPE}, got {qpos.shape}")
+        message["qpos"] = qpos
+    elif message_type == "keypoints_frame":
+        keypoints = np.asarray(message.get("keypoints"), dtype=np.float64)
+        if keypoints.shape != KEYPOINTS_SHAPE:
+            raise ValueError(f"keypoints must have shape {KEYPOINTS_SHAPE}, got {keypoints.shape}")
+        message["keypoints"] = keypoints
+    else:
         raise ValueError(f"unsupported message type {message_type!r}")
 
-    qpos = np.asarray(message.get("qpos"), dtype=np.float64)
-    if qpos.shape != JOINT_MATRIX_SHAPE:
-        raise ValueError(f"qpos must have shape {JOINT_MATRIX_SHAPE}, got {qpos.shape}")
-    message["qpos"] = qpos
     message["seq"] = int(message.get("seq", -1))
     message["timestamp"] = float(message.get("timestamp", 0.0))
     return message

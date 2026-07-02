@@ -24,10 +24,12 @@ trap cleanup INT TERM EXIT
 start_server() {
   local port="$1"
   local serial="$2"
+  local side="$3"
   local cmd=(
     python "$SCRIPT_DIR/hand_qpos_server.py"
     --bind-host 0.0.0.0
     --port "$port"
+    --hand "$side"
     --enable-hand
     --rate 60
     --lowpass 10
@@ -40,7 +42,7 @@ start_server() {
   pids+=("$!")
 }
 
-start_server "$LEFT_PORT" "$LEFT_HAND_SERIAL"
-start_server "$RIGHT_PORT" "$RIGHT_HAND_SERIAL"
+start_server "$LEFT_PORT" "$LEFT_HAND_SERIAL" "left"
+start_server "$RIGHT_PORT" "$RIGHT_HAND_SERIAL" "right"
 
 wait

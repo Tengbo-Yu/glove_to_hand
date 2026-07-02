@@ -1,13 +1,27 @@
 import argparse
 import signal
 import socket
+import sys
 import time
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import wujihandpy
 
 from qpos_protocol import SocketLineReader, decode_message
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+RETARGETING_ROOT = PROJECT_ROOT / "wuji-retargeting"
+RETARGETING_EXAMPLE = RETARGETING_ROOT / "example"
+
+for path in (RETARGETING_ROOT, RETARGETING_EXAMPLE):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+from wuji_retargeting import Retargeter
 
 
 class IntervalStats:
@@ -45,12 +59,55 @@ class IntervalStats:
         self.counters.clear()
 
 
+def optimizer_timing_summary(retargeter):
+    optimizer = getattr(retargeter, "optimizer", None)
+    if optimizer is None or not hasattr(optimizer, "get_timing_stats"):
+        return ""
+    timing = optimizer.get_timing_stats()
+    avg = timing.get_avg()
+    iter_stats = timing.get_iter_stats()
+    parts = []
+    if avg.get("call_count", 0):
+        parts.append(
+            "opt_ms avg_total={:.2f} nlopt={:.2f} fk={:.2f} jac={:.2f} grad={:.2f}".format(
+                avg.get("total_ms", 0.0),
+                avg.get("nlopt_ms", 0.0),
+                avg.get("fk_ms", 0.0),
+                avg.get("jacobian_ms", 0.0),
+                avg.get("gradient_ms", 0.0),
+            )
+        )
+    if iter_stats:
+        parts.append(
+            "opt_iters mean={:.1f} p90={:.1f} max={}".format(
+                iter_stats.get("mean", 0.0),
+                iter_stats.get("p90", 0.0),
+                iter_stats.get("max", 0),
+            )
+        )
+    return " ".join(parts)
+
+
+def reset_optimizer_timing(retargeter):
+    optimizer = getattr(retargeter, "optimizer", None)
+    if optimizer is not None and hasattr(optimizer, "reset_timing_stats"):
+        optimizer.reset_timing_stats()
+
+
+def set_optimizer_timing(retargeter, enabled):
+    optimizer = getattr(retargeter, "optimizer", None)
+    if optimizer is not None and hasattr(optimizer, "set_timing_enabled"):
+        optimizer.set_timing_enabled(enabled)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Receive retargeted qpos over TCP and drive a Wuji Hand."
+        description="Receive qpos or raw glove keypoints over TCP and drive a Wuji Hand."
     )
     parser.add_argument("--bind-host", default="0.0.0.0", help="Host/IP to listen on.")
     parser.add_argument("--port", type=int, default=8765, help="TCP port to listen on.")
+    parser.add_argument("--hand", default="left", choices=("left", "right"), help="Hand side for robot-side retargeting.")
+    parser.add_argument("--config", default=None, help="Retargeting YAML config path for raw keypoint frames.")
     parser.add_argument("--keep-listening", action="store_true", help="Keep listening for another glove client after a session ends.")
     parser.add_argument("--enable-hand", action="store_true", help="Actually enable and move Wuji Hand.")
     parser.add_argument("--hand-serial", default=None, help="USB serial number for Wuji Hand when multiple hands are connected.")
@@ -64,6 +121,16 @@ def parse_args():
     parser.add_argument("--home-on-shutdown", action=argparse.BooleanOptionalAction, default=True, help="Move Wuji Hand to zero position before shutdown.")
     parser.add_argument("--home-duration", type=float, default=1.5, help="Seconds to spend moving to zero position before shutdown.")
     return parser.parse_args()
+
+
+def resolve_config(config, hand_side):
+    if config:
+        return Path(config).expanduser().resolve()
+    return (
+        RETARGETING_EXAMPLE
+        / "config"
+        / f"adaptive_analytical_wuji_glove_{hand_side}.yaml"
+    )
 
 
 def home_hand(controller, duration, rate):
@@ -156,6 +223,15 @@ def serve_connection(conn, peer, args, stop_requested):
         else:
             print("Dry run: printing received qpos only. Add --enable-hand to move the hand.")
 
+        config_path = resolve_config(args.config, args.hand)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Retargeting config not found: {config_path}")
+        retargeter = Retargeter.from_yaml(str(config_path), args.hand)
+        set_optimizer_timing(retargeter, args.debug_latency)
+        if args.debug_latency:
+            reset_optimizer_timing(retargeter)
+        print(f"Robot-side retarget config: {config_path}")
+
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
         received = 0
         dropped_socket = 0
@@ -192,7 +268,6 @@ def serve_connection(conn, peer, args, stop_requested):
             timeouts = 0
             received += 1
             dropped_socket += dropped
-            last_qpos = message["qpos"]
             seq = message["seq"]
             seq_gap = 0 if last_seq is None else max(0, seq - last_seq - 1)
             last_seq = seq
@@ -200,6 +275,18 @@ def serve_connection(conn, peer, args, stop_requested):
             stats.add("wire_age_ms", wire_age_ms)
             stats.inc("seq_gap", seq_gap)
             stats.inc("dropped_socket", dropped)
+
+            retarget_ms = 0.0
+            if message["type"] == "keypoints_frame":
+                keypoints = message["keypoints"]
+                if np.allclose(keypoints, 0):
+                    continue
+                retarget_start = time.perf_counter()
+                last_qpos = retargeter.retarget(keypoints).reshape(5, 4)
+                retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
+            else:
+                last_qpos = message["qpos"]
+            stats.add("retarget_ms", retarget_ms)
 
             hand_write_ms = 0.0
             if controller is not None:
@@ -214,6 +301,7 @@ def serve_connection(conn, peer, args, stop_requested):
                 print(
                     f"slow-server seq={seq} frame_ms={frame_ms:.1f} "
                     f"wire_age_ms={wire_age_ms:.1f} "
+                    f"retarget_ms={retarget_ms:.1f} "
                     f"socket_wait_ms={(read_metrics or {}).get('socket_wait_ms', 0.0):.1f} "
                     f"drain_ms={(read_metrics or {}).get('socket_drain_ms', 0.0):.1f} "
                     f"hand_write_ms={hand_write_ms:.1f} "
@@ -226,10 +314,13 @@ def serve_connection(conn, peer, args, stop_requested):
                 if args.debug_latency:
                     elapsed = max(now - report_start, 1e-9)
                     fps = stats.count("server_frame_ms") / elapsed
+                    opt_summary = optimizer_timing_summary(retargeter)
                     print(
                         f"latency-server recv={received} fps={fps:.1f} seq={seq} "
                         f"wire_age_ms avg/p95/max={stats.avg('wire_age_ms'):.1f}/"
                         f"{stats.percentile('wire_age_ms', 95):.1f}/{stats.max('wire_age_ms'):.1f} "
+                        f"retarget_ms avg/p95/max={stats.avg('retarget_ms'):.1f}/"
+                        f"{stats.percentile('retarget_ms', 95):.1f}/{stats.max('retarget_ms'):.1f} "
                         f"socket_wait_ms avg/max={stats.avg('socket_wait_ms'):.1f}/{stats.max('socket_wait_ms'):.1f} "
                         f"drain_ms avg/max={stats.avg('socket_drain_ms'):.1f}/{stats.max('socket_drain_ms'):.1f} "
                         f"hand_write_ms avg/p95/max={stats.avg('hand_write_ms'):.1f}/"
@@ -239,11 +330,13 @@ def serve_connection(conn, peer, args, stop_requested):
                         f"dropped_socket={int(stats.counters['dropped_socket'])} "
                         f"seq_gap={int(stats.counters['seq_gap'])} "
                         f"thumb={np.round(last_qpos[0], 3).tolist()} "
-                        f"index={np.round(last_qpos[1], 3).tolist()}",
+                        f"index={np.round(last_qpos[1], 3).tolist()} "
+                        f"{opt_summary}",
                         flush=True,
                     )
                     stats.reset()
                     report_start = now
+                    reset_optimizer_timing(retargeter)
                 else:
                     print(
                         f"recv={received} seq={message['seq']} "
