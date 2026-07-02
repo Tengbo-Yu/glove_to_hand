@@ -44,6 +44,8 @@ def parse_args():
     parser.add_argument("--right-hand-serial", default=None, help="USB serial number for the right Wuji Hand.")
     parser.add_argument("--left-config", default=None, help="Left retargeting YAML config path.")
     parser.add_argument("--right-config", default=None, help="Right retargeting YAML config path.")
+    parser.add_argument("--glove-stream", choices=("hand_skeleton", "offline_hand_skeleton", "emf_poses"), default="offline_hand_skeleton", help="Wuji SDK stream for keypoint input.")
+    parser.add_argument("--wuji-log-level", default="error", choices=("trace", "debug", "info", "warn", "warning", "error", "off"), help="wuji_sdk internal log level.")
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Command rate in Hz.")
     parser.add_argument("--lowpass", type=float, default=5.0, help="Wuji Hand realtime low-pass cutoff in Hz.")
@@ -107,11 +109,14 @@ def setup_side(side, args):
 
     print(f"[{side.label}] Config: {side.config_path}")
     print(f"[{side.label}] Glove device name: {side.glove_name}")
+    print(f"[{side.label}] Glove stream: {args.glove_stream}")
 
     side.input_device = WujiGloveDevice(
         hand_side=side.label,
         device_name=side.glove_name,
         sn=side.glove_sn or None,
+        stream=args.glove_stream,
+        sdk_log_level=args.wuji_log_level,
     )
     side.retargeter = Retargeter.from_yaml(str(side.config_path), side.label)
 

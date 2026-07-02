@@ -19,6 +19,9 @@ GLOVE_SN="WG1JA03260517019"
 # Set DEBUG_LATENCY=1 to print stage timing instead of only qpos summaries.
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
+# Use offline_hand_skeleton to avoid subscribing to the SDK hand_skeleton background handler.
+GLOVE_STREAM="${GLOVE_STREAM:-offline_hand_skeleton}"
+WUJI_LOG_LEVEL="${WUJI_LOG_LEVEL:-error}"
 
 CMD=(
   python "$SCRIPT_DIR/glove_qpos_client.py"
@@ -28,6 +31,8 @@ CMD=(
   --device-name "$GLOVE_NAME"
   --rate 20
   --print-every "$PRINT_EVERY"
+  --glove-stream "$GLOVE_STREAM"
+  --wuji-log-level "$WUJI_LOG_LEVEL"
 )
 
 if [[ -n "$GLOVE_SN" ]]; then

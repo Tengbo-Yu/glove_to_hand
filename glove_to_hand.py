@@ -41,6 +41,8 @@ def parse_args():
     parser.add_argument("--glove-sn", default="", help="Wuji Glove serial number. Use when multiple Wuji devices are online.")
     parser.add_argument("--device-name", default="glove", help="wuji_sdk device name for Wuji Glove.")
     parser.add_argument("--config", default=None, help="Retargeting YAML config path.")
+    parser.add_argument("--glove-stream", choices=("hand_skeleton", "offline_hand_skeleton", "emf_poses"), default="offline_hand_skeleton", help="Wuji SDK stream for keypoint input.")
+    parser.add_argument("--wuji-log-level", default="error", choices=("trace", "debug", "info", "warn", "warning", "error", "off"), help="wuji_sdk internal log level.")
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Command rate in Hz.")
     parser.add_argument("--lowpass", type=float, default=5.0, help="Wuji Hand realtime low-pass cutoff in Hz.")
@@ -91,12 +93,16 @@ def run(args):
     print(f"Config: {config_path}")
     print(f"Hand side: {args.hand}")
     print(f"Glove device name: {args.device_name}")
+    print(f"Glove stream: {args.glove_stream}")
+    print(f"Wuji SDK log level: {args.wuji_log_level}")
     print(f"Mode: {'MOVE HAND' if args.enable_hand else 'DRY RUN'}")
 
     input_device = WujiGloveDevice(
         hand_side=args.hand,
         device_name=args.device_name,
         sn=args.glove_sn or None,
+        stream=args.glove_stream,
+        sdk_log_level=args.wuji_log_level,
     )
     retargeter = Retargeter.from_yaml(str(config_path), args.hand)
 

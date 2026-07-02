@@ -123,6 +123,8 @@ def parse_args():
     parser.add_argument("--device-name", default="glove", help="wuji_sdk device name for Wuji Glove.")
     parser.add_argument("--config", default=None, help="Retargeting YAML config path. Used only when --stream-mode=qpos.")
     parser.add_argument("--stream-mode", choices=("keypoints", "qpos"), default="keypoints", help="Send raw glove keypoints for robot-side retargeting, or retarget locally and send qpos.")
+    parser.add_argument("--glove-stream", choices=("hand_skeleton", "offline_hand_skeleton", "emf_poses"), default="offline_hand_skeleton", help="Wuji SDK stream for keypoint input. offline_hand_skeleton subscribes to emf_poses and computes skeletons in this process to avoid the SDK hand_skeleton background handler.")
+    parser.add_argument("--wuji-log-level", default="error", choices=("trace", "debug", "info", "warn", "warning", "error", "off"), help="wuji_sdk internal log level.")
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Frame send rate in Hz.")
     parser.add_argument("--connect-timeout", type=float, default=10.0, help="Seconds to wait when connecting to the hand server.")
@@ -131,7 +133,7 @@ def parse_args():
     parser.add_argument("--debug-slow-ms", type=float, default=0.0, help="Print slow-frame details above this work time in ms. Default derives from --rate.")
     parser.add_argument("--print-qpos", action="store_true", help="Print every qpos matrix. This can block stdout and add latency.")
     parser.add_argument("--send-timeout", type=float, default=0.0, help="Optional socket send timeout in seconds after connect. Default 0 keeps blocking sends.")
-    parser.add_argument("--send-cached-frames", action="store_true", help="Also send cached glove frames when no fresh SDK frame is available. Default skips cached frames to avoid stale-command latency.")
+    parser.add_argument("--skip-cached-frames", action="store_true", help="Skip cached glove frames when no fresh SDK frame is available. This can reduce stale commands but may starve the robot if the SDK produces fresh frames slowly.")
     return parser.parse_args()
 
 
@@ -164,12 +166,16 @@ def run(args):
     print(f"Stream mode: {args.stream_mode}")
     print(f"Hand side: {args.hand}")
     print(f"Glove device name: {args.device_name}")
+    print(f"Glove stream: {args.glove_stream}")
+    print(f"Wuji SDK log level: {args.wuji_log_level}")
     print(f"Hand server: {args.host}:{args.port}")
 
     input_device = WujiGloveDevice(
         hand_side=args.hand,
         device_name=args.device_name,
         sn=args.glove_sn or None,
+        stream=args.glove_stream,
+        sdk_log_level=args.wuji_log_level,
     )
     retargeter = None
     if config_path is not None:
@@ -231,7 +237,7 @@ def run(args):
             if fingers_pose is None or np.allclose(fingers_pose, 0):
                 time.sleep(0.01)
                 continue
-            if not got_fresh_frame and not args.send_cached_frames:
+            if not got_fresh_frame and args.skip_cached_frames:
                 skipped_cached += 1
                 stats.inc("skipped_cached")
                 now = time.monotonic()

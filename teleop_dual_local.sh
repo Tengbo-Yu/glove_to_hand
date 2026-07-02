@@ -22,6 +22,8 @@ LEFT_GLOVE_SN="WG1JA03260517019"
 # Set DEBUG_LATENCY=1 to print stage timing from both client processes.
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
+GLOVE_STREAM="${GLOVE_STREAM:-offline_hand_skeleton}"
+WUJI_LOG_LEVEL="${WUJI_LOG_LEVEL:-error}"
 
 pids=()
 cleanup() {
@@ -47,6 +49,8 @@ start_client() {
     --device-name "$name"
     --rate 60
     --print-every "$PRINT_EVERY"
+    --glove-stream "$GLOVE_STREAM"
+    --wuji-log-level "$WUJI_LOG_LEVEL"
   )
   if [[ -n "$sn" ]]; then
     cmd+=(--glove-sn "$sn")
