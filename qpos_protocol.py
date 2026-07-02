@@ -137,3 +137,25 @@ class SocketLineReader:
 
         line, _, self._buffer = self._buffer.partition(b"\n")
         return line
+
+    def read_available_lines(self):
+        """Return all complete lines already available, without waiting."""
+        previous_timeout = self._sock.gettimeout()
+        try:
+            self._sock.settimeout(0.0)
+            while True:
+                try:
+                    chunk = self._sock.recv(65536)
+                except (BlockingIOError, socket.timeout):
+                    break
+                if not chunk:
+                    raise EOFError("socket closed")
+                self._buffer += chunk
+        finally:
+            self._sock.settimeout(previous_timeout)
+
+        lines = []
+        while b"\n" in self._buffer:
+            line, _, self._buffer = self._buffer.partition(b"\n")
+            lines.append(line)
+        return lines

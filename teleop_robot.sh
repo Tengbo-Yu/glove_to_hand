@@ -9,6 +9,10 @@ HAND_SERIAL="3378387C3233" #left hand
 
 # Port the glove client will connect to. Must match teleop_client.sh.
 PORT="8765"
+CONTROL_RATE="${CONTROL_RATE:-60}"
+LOWPASS="${LOWPASS:-15}"
+SMOOTH_TAU="${SMOOTH_TAU:-0.05}"
+RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0.6}"
 
 CMD=(
   python "$SCRIPT_DIR/hand_qpos_server.py"
@@ -17,12 +21,19 @@ CMD=(
   --hand left
   --enable-hand
   --rate 60
-  --lowpass 10
+  --control-rate "$CONTROL_RATE"
+  --lowpass "$LOWPASS"
+  --smooth-tau "$SMOOTH_TAU"
+  --retarget-lp-alpha "$RETARGET_LP_ALPHA"
   --home-duration 2
 )
 
 if [[ -n "$HAND_SERIAL" ]]; then
   CMD+=(--hand-serial "$HAND_SERIAL")
+fi
+
+if [[ "${DEBUG_LATENCY:-0}" == "1" ]]; then
+  CMD+=(--debug-latency --print-every "${PRINT_EVERY:-0.5}")
 fi
 
 "${CMD[@]}"

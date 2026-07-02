@@ -208,6 +208,7 @@ def run(args):
         last_print = 0.0
         report_start = time.monotonic()
         last_loop_start = None
+        next_tick = time.monotonic()
         stats = IntervalStats()
         set_optimizer_timing(retargeter, args.debug_latency)
         if args.debug_latency:
@@ -350,7 +351,13 @@ def run(args):
                         )
                 last_print = now
 
-            time.sleep(interval)
+            now = time.monotonic()
+            sleep_s = next_tick - now
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+            elif -sleep_s > interval:
+                next_tick = now
+            next_tick += interval
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)

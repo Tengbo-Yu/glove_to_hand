@@ -2,6 +2,7 @@ import argparse
 import signal
 import socket
 import sys
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -22,6 +23,42 @@ for path in (RETARGETING_ROOT, RETARGETING_EXAMPLE):
         sys.path.insert(0, path_str)
 
 from wuji_retargeting import Retargeter
+
+
+class QposSmoother:
+    def __init__(self, tau=0.05, max_velocity=0.0, enabled=True):
+        self.tau = max(0.0, float(tau))
+        self.max_velocity = max(0.0, float(max_velocity))
+        self.enabled = enabled
+        self.current = None
+        self.target = None
+
+    def set_target(self, qpos):
+        qpos = np.asarray(qpos, dtype=np.float64)
+        self.target = qpos
+        if self.current is None:
+            self.current = qpos.copy()
+
+    def step(self, dt):
+        if self.target is None:
+            return None
+        if self.current is None or not self.enabled:
+            self.current = self.target.copy()
+            return self.current.copy()
+
+        if self.tau <= 0.0:
+            desired = self.target
+        else:
+            alpha = 1.0 - np.exp(-max(0.0, dt) / self.tau)
+            desired = self.current + alpha * (self.target - self.current)
+
+        if self.max_velocity > 0.0 and dt > 0.0:
+            max_delta = self.max_velocity * dt
+            delta = np.clip(desired - self.current, -max_delta, max_delta)
+            self.current = self.current + delta
+        else:
+            self.current = desired.copy()
+        return self.current.copy()
 
 
 class IntervalStats:
@@ -113,7 +150,12 @@ def parse_args():
     parser.add_argument("--hand-serial", default=None, help="USB serial number for Wuji Hand when multiple hands are connected.")
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds after glove connects. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Hand homing timing rate in Hz.")
+    parser.add_argument("--control-rate", type=float, default=60.0, help="Fixed hand command output rate in Hz.")
     parser.add_argument("--lowpass", type=float, default=5.0, help="Wuji Hand realtime low-pass cutoff in Hz.")
+    parser.add_argument("--smooth-tau", type=float, default=0.05, help="Output qpos smoothing time constant in seconds. Lower is faster; higher is smoother.")
+    parser.add_argument("--max-joint-velocity", type=float, default=0.0, help="Optional output slew limit in rad/s. 0 disables slew limiting.")
+    parser.add_argument("--disable-output-smoothing", action="store_true", help="Send each retargeted qpos directly without output smoothing/resampling.")
+    parser.add_argument("--retarget-lp-alpha", type=float, default=0.0, help="Override retargeter low-pass alpha. 0 keeps config value.")
     parser.add_argument("--print-every", type=float, default=1.0, help="Seconds between status prints.")
     parser.add_argument("--socket-timeout", type=float, default=1.0, help="Seconds to wait for a glove frame before printing a timeout warning.")
     parser.add_argument("--debug-latency", action="store_true", help="Print socket/frame/hand-write timing summaries for latency diagnosis.")
@@ -157,7 +199,7 @@ def create_hand_controller(hand_serial, lowpass):
 
 
 def read_latest_qpos(reader, metrics=None):
-    """Drain all buffered lines, returning the newest qpos message.
+    """Drain all buffered lines, returning the newest qpos/keypoints message.
 
     Returns (message_or_None, dropped). None means no full frame was available
     before the socket timeout (so the caller should keep waiting).
@@ -197,10 +239,7 @@ def read_latest_qpos(reader, metrics=None):
         metrics["socket_wait_ms"] = (time.perf_counter() - wait_start) * 1000.0
 
     drain_start = time.perf_counter()
-    while True:
-        line = reader.read_available_line()
-        if line is None:
-            break
+    for line in reader.read_available_lines():
         process_line(line)
     if metrics is not None:
         metrics["socket_drain_ms"] = (time.perf_counter() - drain_start) * 1000.0
@@ -214,6 +253,44 @@ def serve_connection(conn, peer, args, stop_requested):
 
     hand = None
     controller = None
+    receiver_stop = threading.Event()
+    receiver_done = threading.Event()
+    receiver_state = {
+        "message": None,
+        "dropped": 0,
+        "metrics": None,
+        "version": 0,
+        "timeouts": 0,
+        "eof": False,
+    }
+    receiver_lock = threading.Lock()
+
+    def receiver_loop():
+        while not receiver_stop.is_set() and not stop_requested():
+            metrics = {} if args.debug_latency else None
+            try:
+                message, dropped = read_latest_qpos(reader, metrics)
+            except EOFError:
+                print("Glove client disconnected.")
+                with receiver_lock:
+                    receiver_state["eof"] = True
+                break
+            if message is None:
+                with receiver_lock:
+                    receiver_state["timeouts"] += 1
+                    timeouts = receiver_state["timeouts"]
+                if timeouts == 1 or timeouts % 5 == 0:
+                    print(f"Waiting for glove frames... socket_timeouts={timeouts}")
+                continue
+            with receiver_lock:
+                receiver_state["message"] = message
+                receiver_state["dropped"] += dropped
+                receiver_state["metrics"] = metrics
+                receiver_state["version"] += 1
+                receiver_state["timeouts"] = 0
+        receiver_done.set()
+
+    receiver = threading.Thread(target=receiver_loop, name="qpos-receiver", daemon=True)
 
     try:
         if args.enable_hand:
@@ -227,96 +304,129 @@ def serve_connection(conn, peer, args, stop_requested):
         if not config_path.exists():
             raise FileNotFoundError(f"Retargeting config not found: {config_path}")
         retargeter = Retargeter.from_yaml(str(config_path), args.hand)
+        if args.retarget_lp_alpha > 0:
+            retargeter.lp_filter.alpha = args.retarget_lp_alpha
+            print(f"Retarget low-pass alpha override: {args.retarget_lp_alpha}")
         set_optimizer_timing(retargeter, args.debug_latency)
         if args.debug_latency:
             reset_optimizer_timing(retargeter)
         print(f"Robot-side retarget config: {config_path}")
+        print(
+            f"Output smoothing: {'off' if args.disable_output_smoothing else 'on'} "
+            f"control_rate={args.control_rate:g}Hz smooth_tau={args.smooth_tau:g}s "
+            f"max_joint_velocity={args.max_joint_velocity:g}"
+        )
 
+        receiver.start()
+
+        control_interval = 1.0 / args.control_rate
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
-        received = 0
-        dropped_socket = 0
-        timeouts = 0
+        next_tick = time.monotonic()
+        last_tick = next_tick
         last_print = 0.0
-        last_qpos = None
+        last_version = -1
         last_seq = None
-        report_start = time.monotonic()
+        received = 0
+        last_qpos = None
+        smoother = QposSmoother(
+            tau=args.smooth_tau,
+            max_velocity=args.max_joint_velocity,
+            enabled=not args.disable_output_smoothing,
+        )
         stats = IntervalStats()
-        interval_ms = (1.0 / args.rate) * 1000.0 if args.rate > 0 else 0.0
+        report_start = time.monotonic()
+        interval_ms = control_interval * 1000.0
         slow_ms = args.debug_slow_ms if args.debug_slow_ms > 0 else max(50.0, 2.0 * interval_ms)
 
         while not stop_requested() and (deadline is None or time.monotonic() < deadline):
-            frame_start = time.perf_counter()
-            read_metrics = {} if args.debug_latency else None
-            try:
-                message, dropped = read_latest_qpos(reader, read_metrics)
-            except EOFError:
-                print("Glove client disconnected.")
+            now = time.monotonic()
+            sleep_s = next_tick - now
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+                now = time.monotonic()
+            elif -sleep_s > control_interval:
+                next_tick = now
+            dt = max(0.0, now - last_tick)
+            last_tick = now
+            next_tick += control_interval
+
+            with receiver_lock:
+                eof = receiver_state["eof"]
+                version = receiver_state["version"]
+                message = receiver_state["message"]
+                dropped = receiver_state["dropped"]
+                read_metrics = receiver_state["metrics"]
+                receiver_state["dropped"] = 0
+            if eof and message is None:
                 break
 
-            if args.debug_latency and read_metrics is not None:
-                stats.add("socket_wait_ms", read_metrics.get("socket_wait_ms"))
-                stats.add("socket_drain_ms", read_metrics.get("socket_drain_ms"))
-                stats.inc("decoded_frames", read_metrics.get("decoded_frames", 0))
-                stats.inc("malformed_messages", read_metrics.get("malformed_messages", 0))
-
-            if message is None:
-                timeouts += 1
-                if timeouts == 1 or timeouts % 5 == 0:
-                    print(f"Waiting for glove frames... socket_timeouts={timeouts}")
-                continue
-
-            timeouts = 0
-            received += 1
-            dropped_socket += dropped
-            seq = message["seq"]
-            seq_gap = 0 if last_seq is None else max(0, seq - last_seq - 1)
-            last_seq = seq
-            wire_age_ms = (time.time() - message["timestamp"]) * 1000.0
-            stats.add("wire_age_ms", wire_age_ms)
-            stats.inc("seq_gap", seq_gap)
-            stats.inc("dropped_socket", dropped)
-
+            new_target = False
+            seq = last_seq
             retarget_ms = 0.0
-            if message["type"] == "keypoints_frame":
-                keypoints = message["keypoints"]
-                if np.allclose(keypoints, 0):
-                    continue
-                retarget_start = time.perf_counter()
-                last_qpos = retargeter.retarget(keypoints).reshape(5, 4)
-                retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
-            else:
-                last_qpos = message["qpos"]
-            stats.add("retarget_ms", retarget_ms)
+            wire_age_ms = 0.0
+            seq_gap = 0
+            if message is not None and version != last_version:
+                frame_start = time.perf_counter()
+                last_version = version
+                received += 1
+                seq = message["seq"]
+                seq_gap = 0 if last_seq is None else max(0, seq - last_seq - 1)
+                last_seq = seq
+                wire_age_ms = (time.time() - message["timestamp"]) * 1000.0
+                stats.add("wire_age_ms", wire_age_ms)
+                stats.inc("seq_gap", seq_gap)
+                stats.inc("dropped_socket", dropped)
+                if read_metrics is not None:
+                    stats.add("socket_wait_ms", read_metrics.get("socket_wait_ms"))
+                    stats.add("socket_drain_ms", read_metrics.get("socket_drain_ms"))
+                    stats.inc("decoded_frames", read_metrics.get("decoded_frames", 0))
+                    stats.inc("malformed_messages", read_metrics.get("malformed_messages", 0))
 
+                if message["type"] == "keypoints_frame":
+                    keypoints = message["keypoints"]
+                    if not np.allclose(keypoints, 0):
+                        retarget_start = time.perf_counter()
+                        last_qpos = retargeter.retarget(keypoints).reshape(5, 4)
+                        retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
+                        new_target = True
+                else:
+                    last_qpos = message["qpos"]
+                    new_target = True
+                if new_target:
+                    smoother.set_target(last_qpos)
+                stats.add("retarget_ms", retarget_ms)
+                frame_ms = (time.perf_counter() - frame_start) * 1000.0
+                stats.add("server_frame_ms", frame_ms)
+                if args.debug_latency and frame_ms >= slow_ms:
+                    print(
+                        f"slow-server seq={seq} frame_ms={frame_ms:.1f} "
+                        f"wire_age_ms={wire_age_ms:.1f} "
+                        f"retarget_ms={retarget_ms:.1f} "
+                        f"socket_wait_ms={(read_metrics or {}).get('socket_wait_ms', 0.0):.1f} "
+                        f"drain_ms={(read_metrics or {}).get('socket_drain_ms', 0.0):.1f} "
+                        f"dropped_in_read={dropped} seq_gap={seq_gap}",
+                        flush=True,
+                    )
+
+            command_qpos = smoother.step(dt)
             hand_write_ms = 0.0
-            if controller is not None:
+            if command_qpos is not None and controller is not None:
                 hand_start = time.perf_counter()
-                controller.set_joint_target_position(last_qpos)
+                controller.set_joint_target_position(command_qpos)
                 hand_write_ms = (time.perf_counter() - hand_start) * 1000.0
             stats.add("hand_write_ms", hand_write_ms)
-
-            frame_ms = (time.perf_counter() - frame_start) * 1000.0
-            stats.add("server_frame_ms", frame_ms)
-            if args.debug_latency and frame_ms >= slow_ms:
-                print(
-                    f"slow-server seq={seq} frame_ms={frame_ms:.1f} "
-                    f"wire_age_ms={wire_age_ms:.1f} "
-                    f"retarget_ms={retarget_ms:.1f} "
-                    f"socket_wait_ms={(read_metrics or {}).get('socket_wait_ms', 0.0):.1f} "
-                    f"drain_ms={(read_metrics or {}).get('socket_drain_ms', 0.0):.1f} "
-                    f"hand_write_ms={hand_write_ms:.1f} "
-                    f"dropped_in_read={dropped} seq_gap={seq_gap}",
-                    flush=True,
-                )
+            stats.inc("control_ticks")
 
             now = time.monotonic()
-            if now - last_print >= args.print_every:
+            if now - last_print >= args.print_every and command_qpos is not None:
                 if args.debug_latency:
                     elapsed = max(now - report_start, 1e-9)
-                    fps = stats.count("server_frame_ms") / elapsed
+                    recv_fps = stats.count("server_frame_ms") / elapsed
+                    control_fps = stats.counters["control_ticks"] / elapsed
                     opt_summary = optimizer_timing_summary(retargeter)
                     print(
-                        f"latency-server recv={received} fps={fps:.1f} seq={seq} "
+                        f"latency-server recv={received} recv_fps={recv_fps:.1f} "
+                        f"control_fps={control_fps:.1f} seq={seq} "
                         f"wire_age_ms avg/p95/max={stats.avg('wire_age_ms'):.1f}/"
                         f"{stats.percentile('wire_age_ms', 95):.1f}/{stats.max('wire_age_ms'):.1f} "
                         f"retarget_ms avg/p95/max={stats.avg('retarget_ms'):.1f}/"
@@ -325,12 +435,10 @@ def serve_connection(conn, peer, args, stop_requested):
                         f"drain_ms avg/max={stats.avg('socket_drain_ms'):.1f}/{stats.max('socket_drain_ms'):.1f} "
                         f"hand_write_ms avg/p95/max={stats.avg('hand_write_ms'):.1f}/"
                         f"{stats.percentile('hand_write_ms', 95):.1f}/{stats.max('hand_write_ms'):.1f} "
-                        f"frame_ms avg/p95/max={stats.avg('server_frame_ms'):.1f}/"
-                        f"{stats.percentile('server_frame_ms', 95):.1f}/{stats.max('server_frame_ms'):.1f} "
                         f"dropped_socket={int(stats.counters['dropped_socket'])} "
                         f"seq_gap={int(stats.counters['seq_gap'])} "
-                        f"thumb={np.round(last_qpos[0], 3).tolist()} "
-                        f"index={np.round(last_qpos[1], 3).tolist()} "
+                        f"thumb={np.round(command_qpos[0], 3).tolist()} "
+                        f"index={np.round(command_qpos[1], 3).tolist()} "
                         f"{opt_summary}",
                         flush=True,
                     )
@@ -339,14 +447,15 @@ def serve_connection(conn, peer, args, stop_requested):
                     reset_optimizer_timing(retargeter)
                 else:
                     print(
-                        f"recv={received} seq={message['seq']} "
-                        f"thumb={np.round(last_qpos[0], 3).tolist()} "
-                        f"index={np.round(last_qpos[1], 3).tolist()} "
-                        f"dropped_socket={dropped_socket}"
+                        f"recv={received} seq={seq} "
+                        f"thumb={np.round(command_qpos[0], 3).tolist()} "
+                        f"index={np.round(command_qpos[1], 3).tolist()}"
                     )
-                    dropped_socket = 0
                 last_print = now
     finally:
+        receiver_stop.set()
+        if receiver.is_alive():
+            receiver.join(timeout=1.0)
         if hand is not None:
             if controller is not None and args.home_on_shutdown:
                 try:
