@@ -17,8 +17,9 @@ RIGHT_GLOVE_NAME="glove_r"
 
 # Fill these if multiple Wuji gloves are online. Leave empty to auto-connect.
 
-RIGHT_GLOVE_SN="WG1KA03260512012"
-LEFT_GLOVE_SN="WG1JA03260517019"
+# Set DEBUG_LATENCY=1 to print stage timing from both client processes.
+DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
+PRINT_EVERY="${PRINT_EVERY:-0.5}"
 
 pids=()
 cleanup() {
@@ -43,9 +44,13 @@ start_client() {
     --hand "$side"
     --device-name "$name"
     --rate 60
+    --print-every "$PRINT_EVERY"
   )
   if [[ -n "$sn" ]]; then
     cmd+=(--glove-sn "$sn")
+  fi
+  if [[ "$DEBUG_LATENCY" == "1" ]]; then
+    cmd+=(--debug-latency)
   fi
   "${cmd[@]}" &
   pids+=("$!")

@@ -16,6 +16,9 @@ GLOVE_NAME="glove"
 # LEFT_GLOVE_SN="WG1JA03260517019"
 GLOVE_SN="WG1JA03260517019"
 
+# Set DEBUG_LATENCY=1 to print stage timing instead of only qpos summaries.
+DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
+PRINT_EVERY="${PRINT_EVERY:-0.5}"
 
 CMD=(
   python "$SCRIPT_DIR/glove_qpos_client.py"
@@ -24,10 +27,15 @@ CMD=(
   --hand "$HAND_SIDE"
   --device-name "$GLOVE_NAME"
   --rate 60
+  --print-every "$PRINT_EVERY"
 )
 
 if [[ -n "$GLOVE_SN" ]]; then
   CMD+=(--glove-sn "$GLOVE_SN")
+fi
+
+if [[ "$DEBUG_LATENCY" == "1" ]]; then
+  CMD+=(--debug-latency)
 fi
 
 "${CMD[@]}"

@@ -24,17 +24,20 @@ def make_hello_message(hand_side, sent_at):
     }
 
 
-def make_qpos_message(seq, qpos, timestamp):
+def make_qpos_message(seq, qpos, timestamp, debug=None):
     qpos = np.asarray(qpos, dtype=np.float64)
     if qpos.shape != JOINT_MATRIX_SHAPE:
         raise ValueError(f"qpos must have shape {JOINT_MATRIX_SHAPE}, got {qpos.shape}")
-    return {
+    message = {
         "type": "frame",
         "protocol": PROTOCOL_NAME,
         "seq": int(seq),
         "timestamp": float(timestamp),
         "qpos": qpos.tolist(),
     }
+    if debug is not None:
+        message["debug"] = debug
+    return message
 
 
 def encode_message(message):

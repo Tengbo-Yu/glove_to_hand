@@ -2,11 +2,47 @@ import argparse
 import signal
 import socket
 import time
+from collections import defaultdict
 
 import numpy as np
 import wujihandpy
 
 from qpos_protocol import SocketLineReader, decode_message
+
+
+class IntervalStats:
+    def __init__(self):
+        self.samples = defaultdict(list)
+        self.counters = defaultdict(float)
+
+    def add(self, name, value):
+        if value is None:
+            return
+        self.samples[name].append(float(value))
+
+    def inc(self, name, value=1):
+        self.counters[name] += value
+
+    def count(self, name):
+        return len(self.samples.get(name, ()))
+
+    def avg(self, name):
+        values = self.samples.get(name, ())
+        return sum(values) / len(values) if values else 0.0
+
+    def max(self, name):
+        values = self.samples.get(name, ())
+        return max(values) if values else 0.0
+
+    def percentile(self, name, percentile):
+        values = self.samples.get(name, ())
+        if not values:
+            return 0.0
+        return float(np.percentile(np.asarray(values, dtype=np.float64), percentile))
+
+    def reset(self):
+        self.samples.clear()
+        self.counters.clear()
 
 
 def parse_args():
@@ -23,6 +59,8 @@ def parse_args():
     parser.add_argument("--lowpass", type=float, default=5.0, help="Wuji Hand realtime low-pass cutoff in Hz.")
     parser.add_argument("--print-every", type=float, default=1.0, help="Seconds between status prints.")
     parser.add_argument("--socket-timeout", type=float, default=1.0, help="Seconds to wait for a glove frame before printing a timeout warning.")
+    parser.add_argument("--debug-latency", action="store_true", help="Print socket/frame/hand-write timing summaries for latency diagnosis.")
+    parser.add_argument("--debug-slow-ms", type=float, default=0.0, help="Print slow-frame details above this server processing time in ms. Default derives from --rate.")
     parser.add_argument("--home-on-shutdown", action=argparse.BooleanOptionalAction, default=True, help="Move Wuji Hand to zero position before shutdown.")
     parser.add_argument("--home-duration", type=float, default=1.5, help="Seconds to spend moving to zero position before shutdown.")
     return parser.parse_args()
@@ -51,7 +89,7 @@ def create_hand_controller(hand_serial, lowpass):
     return hand, controller
 
 
-def read_latest_qpos(reader):
+def read_latest_qpos(reader, metrics=None):
     """Drain all buffered lines, returning the newest qpos message.
 
     Returns (message_or_None, dropped). None means no full frame was available
@@ -59,6 +97,10 @@ def read_latest_qpos(reader):
     """
     message = None
     dropped = 0
+    if metrics is not None:
+        metrics.setdefault("decoded_frames", 0)
+        metrics.setdefault("malformed_messages", 0)
+        metrics.setdefault("hello_messages", 0)
 
     def process_line(line):
         nonlocal message, dropped
@@ -67,21 +109,34 @@ def read_latest_qpos(reader):
         try:
             decoded = decode_message(line)
         except ValueError as exc:
+            if metrics is not None:
+                metrics["malformed_messages"] += 1
             print(f"Ignoring malformed socket message: {exc}")
             return
         if decoded["type"] == "hello":
+            if metrics is not None:
+                metrics["hello_messages"] += 1
             print(f"Glove client hello: hand_side={decoded.get('hand_side', 'unknown')}")
             return
+        if metrics is not None:
+            metrics["decoded_frames"] += 1
         if message is not None:
             dropped += 1
         message = decoded
 
+    wait_start = time.perf_counter()
     process_line(reader.read_line())
+    if metrics is not None:
+        metrics["socket_wait_ms"] = (time.perf_counter() - wait_start) * 1000.0
+
+    drain_start = time.perf_counter()
     while True:
         line = reader.read_available_line()
         if line is None:
             break
         process_line(line)
+    if metrics is not None:
+        metrics["socket_drain_ms"] = (time.perf_counter() - drain_start) * 1000.0
     return message, dropped
 
 
@@ -107,13 +162,26 @@ def serve_connection(conn, peer, args, stop_requested):
         timeouts = 0
         last_print = 0.0
         last_qpos = None
+        last_seq = None
+        report_start = time.monotonic()
+        stats = IntervalStats()
+        interval_ms = (1.0 / args.rate) * 1000.0 if args.rate > 0 else 0.0
+        slow_ms = args.debug_slow_ms if args.debug_slow_ms > 0 else max(50.0, 2.0 * interval_ms)
 
         while not stop_requested() and (deadline is None or time.monotonic() < deadline):
+            frame_start = time.perf_counter()
+            read_metrics = {} if args.debug_latency else None
             try:
-                message, dropped = read_latest_qpos(reader)
+                message, dropped = read_latest_qpos(reader, read_metrics)
             except EOFError:
                 print("Glove client disconnected.")
                 break
+
+            if args.debug_latency and read_metrics is not None:
+                stats.add("socket_wait_ms", read_metrics.get("socket_wait_ms"))
+                stats.add("socket_drain_ms", read_metrics.get("socket_drain_ms"))
+                stats.inc("decoded_frames", read_metrics.get("decoded_frames", 0))
+                stats.inc("malformed_messages", read_metrics.get("malformed_messages", 0))
 
             if message is None:
                 timeouts += 1
@@ -125,20 +193,66 @@ def serve_connection(conn, peer, args, stop_requested):
             received += 1
             dropped_socket += dropped
             last_qpos = message["qpos"]
+            seq = message["seq"]
+            seq_gap = 0 if last_seq is None else max(0, seq - last_seq - 1)
+            last_seq = seq
+            wire_age_ms = (time.time() - message["timestamp"]) * 1000.0
+            stats.add("wire_age_ms", wire_age_ms)
+            stats.inc("seq_gap", seq_gap)
+            stats.inc("dropped_socket", dropped)
 
+            hand_write_ms = 0.0
             if controller is not None:
+                hand_start = time.perf_counter()
                 controller.set_joint_target_position(last_qpos)
+                hand_write_ms = (time.perf_counter() - hand_start) * 1000.0
+            stats.add("hand_write_ms", hand_write_ms)
+
+            frame_ms = (time.perf_counter() - frame_start) * 1000.0
+            stats.add("server_frame_ms", frame_ms)
+            if args.debug_latency and frame_ms >= slow_ms:
+                print(
+                    f"slow-server seq={seq} frame_ms={frame_ms:.1f} "
+                    f"wire_age_ms={wire_age_ms:.1f} "
+                    f"socket_wait_ms={(read_metrics or {}).get('socket_wait_ms', 0.0):.1f} "
+                    f"drain_ms={(read_metrics or {}).get('socket_drain_ms', 0.0):.1f} "
+                    f"hand_write_ms={hand_write_ms:.1f} "
+                    f"dropped_in_read={dropped} seq_gap={seq_gap}",
+                    flush=True,
+                )
 
             now = time.monotonic()
             if now - last_print >= args.print_every:
-                print(
-                    f"recv={received} seq={message['seq']} "
-                    f"thumb={np.round(last_qpos[0], 3).tolist()} "
-                    f"index={np.round(last_qpos[1], 3).tolist()} "
-                    f"dropped_socket={dropped_socket}"
-                )
+                if args.debug_latency:
+                    elapsed = max(now - report_start, 1e-9)
+                    fps = stats.count("server_frame_ms") / elapsed
+                    print(
+                        f"latency-server recv={received} fps={fps:.1f} seq={seq} "
+                        f"wire_age_ms avg/p95/max={stats.avg('wire_age_ms'):.1f}/"
+                        f"{stats.percentile('wire_age_ms', 95):.1f}/{stats.max('wire_age_ms'):.1f} "
+                        f"socket_wait_ms avg/max={stats.avg('socket_wait_ms'):.1f}/{stats.max('socket_wait_ms'):.1f} "
+                        f"drain_ms avg/max={stats.avg('socket_drain_ms'):.1f}/{stats.max('socket_drain_ms'):.1f} "
+                        f"hand_write_ms avg/p95/max={stats.avg('hand_write_ms'):.1f}/"
+                        f"{stats.percentile('hand_write_ms', 95):.1f}/{stats.max('hand_write_ms'):.1f} "
+                        f"frame_ms avg/p95/max={stats.avg('server_frame_ms'):.1f}/"
+                        f"{stats.percentile('server_frame_ms', 95):.1f}/{stats.max('server_frame_ms'):.1f} "
+                        f"dropped_socket={int(stats.counters['dropped_socket'])} "
+                        f"seq_gap={int(stats.counters['seq_gap'])} "
+                        f"thumb={np.round(last_qpos[0], 3).tolist()} "
+                        f"index={np.round(last_qpos[1], 3).tolist()}",
+                        flush=True,
+                    )
+                    stats.reset()
+                    report_start = now
+                else:
+                    print(
+                        f"recv={received} seq={message['seq']} "
+                        f"thumb={np.round(last_qpos[0], 3).tolist()} "
+                        f"index={np.round(last_qpos[1], 3).tolist()} "
+                        f"dropped_socket={dropped_socket}"
+                    )
+                    dropped_socket = 0
                 last_print = now
-                dropped_socket = 0
     finally:
         if hand is not None:
             if controller is not None and args.home_on_shutdown:

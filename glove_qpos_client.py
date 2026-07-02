@@ -3,6 +3,7 @@ import signal
 import socket
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,82 @@ def resolve_config(config, hand_side):
     )
 
 
+class IntervalStats:
+    def __init__(self):
+        self.samples = defaultdict(list)
+        self.counters = defaultdict(float)
+
+    def add(self, name, value):
+        if value is None:
+            return
+        self.samples[name].append(float(value))
+
+    def inc(self, name, value=1):
+        self.counters[name] += value
+
+    def count(self, name):
+        return len(self.samples.get(name, ()))
+
+    def avg(self, name):
+        values = self.samples.get(name, ())
+        return sum(values) / len(values) if values else 0.0
+
+    def max(self, name):
+        values = self.samples.get(name, ())
+        return max(values) if values else 0.0
+
+    def percentile(self, name, percentile):
+        values = self.samples.get(name, ())
+        if not values:
+            return 0.0
+        return float(np.percentile(np.asarray(values, dtype=np.float64), percentile))
+
+    def reset(self):
+        self.samples.clear()
+        self.counters.clear()
+
+
+def optimizer_timing_summary(retargeter):
+    optimizer = getattr(retargeter, "optimizer", None)
+    if optimizer is None or not hasattr(optimizer, "get_timing_stats"):
+        return ""
+    timing = optimizer.get_timing_stats()
+    avg = timing.get_avg()
+    iter_stats = timing.get_iter_stats()
+    parts = []
+    if avg.get("call_count", 0):
+        parts.append(
+            "opt_ms avg_total={:.2f} nlopt={:.2f} fk={:.2f} jac={:.2f} grad={:.2f}".format(
+                avg.get("total_ms", 0.0),
+                avg.get("nlopt_ms", 0.0),
+                avg.get("fk_ms", 0.0),
+                avg.get("jacobian_ms", 0.0),
+                avg.get("gradient_ms", 0.0),
+            )
+        )
+    if iter_stats:
+        parts.append(
+            "opt_iters mean={:.1f} p90={:.1f} max={}".format(
+                iter_stats.get("mean", 0.0),
+                iter_stats.get("p90", 0.0),
+                iter_stats.get("max", 0),
+            )
+        )
+    return " ".join(parts)
+
+
+def reset_optimizer_timing(retargeter):
+    optimizer = getattr(retargeter, "optimizer", None)
+    if optimizer is not None and hasattr(optimizer, "reset_timing_stats"):
+        optimizer.reset_timing_stats()
+
+
+def set_optimizer_timing(retargeter, enabled):
+    optimizer = getattr(retargeter, "optimizer", None)
+    if optimizer is not None and hasattr(optimizer, "set_timing_enabled"):
+        optimizer.set_timing_enabled(enabled)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Read a Wuji Glove, retarget to hand joints, and stream qpos to a hand server over TCP."
@@ -47,6 +124,10 @@ def parse_args():
     parser.add_argument("--rate", type=float, default=30.0, help="Frame send rate in Hz.")
     parser.add_argument("--connect-timeout", type=float, default=10.0, help="Seconds to wait when connecting to the hand server.")
     parser.add_argument("--print-every", type=float, default=1.0, help="Seconds between status prints.")
+    parser.add_argument("--debug-latency", action="store_true", help="Print per-stage timing summaries for latency diagnosis.")
+    parser.add_argument("--debug-slow-ms", type=float, default=0.0, help="Print slow-frame details above this work time in ms. Default derives from --rate.")
+    parser.add_argument("--print-qpos", action="store_true", help="Print every qpos matrix. This can block stdout and add latency.")
+    parser.add_argument("--send-timeout", type=float, default=0.0, help="Optional socket send timeout in seconds after connect. Default 0 keeps blocking sends.")
     return parser.parse_args()
 
 
@@ -97,35 +178,124 @@ def run(args):
 
     try:
         sock = open_socket(args.host, args.port, args.connect_timeout)
+        if args.send_timeout > 0:
+            sock.settimeout(args.send_timeout)
         print('----- hello ')
         sock.sendall(encode_message(make_hello_message(args.hand, time.time())))
         print(f"Streaming retargeted qpos to {args.host}:{args.port}")
 
         interval = 1.0 / args.rate
+        interval_ms = interval * 1000.0
+        slow_ms = args.debug_slow_ms if args.debug_slow_ms > 0 else max(50.0, 2.0 * interval_ms)
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
         seq = 0
         last_print = 0.0
+        report_start = time.monotonic()
+        last_loop_start = None
+        stats = IntervalStats()
+        set_optimizer_timing(retargeter, args.debug_latency)
+        if args.debug_latency:
+            reset_optimizer_timing(retargeter)
 
         while not stop_requested and (deadline is None or time.monotonic() < deadline):
+            loop_start = time.perf_counter()
+            if last_loop_start is not None:
+                stats.add("loop_period_ms", (loop_start - last_loop_start) * 1000.0)
+            last_loop_start = loop_start
+
+            glove_start = time.perf_counter()
             fingers_data = input_device.get_fingers_data()
+            glove_ms = (time.perf_counter() - glove_start) * 1000.0
             fingers_pose = fingers_data[f"{args.hand}_fingers"]
+            stats.add("glove_ms", glove_ms)
+
+            glove_debug = {}
+            if args.debug_latency and hasattr(input_device, "get_debug_stats"):
+                glove_debug = input_device.get_debug_stats()
+                stats.inc("cache_hits", 1 if glove_debug.get("last_poll_new_frames", 0) == 0 else 0)
+                stats.inc("sdk_drained", glove_debug.get("last_poll_drained_frames", 0))
+                stats.add("glove_age_ms", glove_debug.get("last_cache_age_ms"))
+                stats.add("sdk_recv_ms", glove_debug.get("last_recv_ms"))
+                stats.add("sdk_drain_ms", glove_debug.get("last_drain_ms"))
 
             if fingers_pose is None or np.allclose(fingers_pose, 0):
                 time.sleep(0.01)
                 continue
 
+            retarget_start = time.perf_counter()
             qpos = retargeter.retarget(fingers_pose).reshape(5, 4)
-            print(qpos)
-            sock.sendall(encode_message(make_qpos_message(seq, qpos, time.time())))
+            retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
+            stats.add("retarget_ms", retarget_ms)
+            if args.print_qpos:
+                print(qpos)
+
+            debug_payload = None
+            if args.debug_latency:
+                debug_payload = {
+                    "client_glove_ms": round(glove_ms, 3),
+                    "client_retarget_ms": round(retarget_ms, 3),
+                    "client_glove_cache_hit": glove_debug.get("last_poll_new_frames", 0) == 0,
+                    "client_glove_age_ms": glove_debug.get("last_cache_age_ms"),
+                    "client_sdk_drained": glove_debug.get("last_poll_drained_frames", 0),
+                }
+
+            encode_start = time.perf_counter()
+            payload = encode_message(make_qpos_message(seq, qpos, time.time(), debug=debug_payload))
+            encode_ms = (time.perf_counter() - encode_start) * 1000.0
+            stats.add("encode_ms", encode_ms)
+
+            send_start = time.perf_counter()
+            sock.sendall(payload)
+            sendall_ms = (time.perf_counter() - send_start) * 1000.0
+            stats.add("sendall_ms", sendall_ms)
+
+            work_ms = (time.perf_counter() - loop_start) * 1000.0
+            behind_ms = max(0.0, work_ms - interval_ms)
+            stats.add("work_ms", work_ms)
+            stats.add("behind_ms", behind_ms)
+            if args.debug_latency and work_ms >= slow_ms:
+                print(
+                    f"slow-client seq={seq} work_ms={work_ms:.1f} "
+                    f"glove_ms={glove_ms:.1f} retarget_ms={retarget_ms:.1f} "
+                    f"encode_ms={encode_ms:.1f} sendall_ms={sendall_ms:.1f} "
+                    f"behind_ms={behind_ms:.1f} "
+                    f"glove_age_ms={glove_debug.get('last_cache_age_ms')}",
+                    flush=True,
+                )
             seq += 1
 
             now = time.monotonic()
             if now - last_print >= args.print_every:
-                print(
-                    f"sent={seq} "
-                    f"thumb={np.round(qpos[0], 3).tolist()} "
-                    f"index={np.round(qpos[1], 3).tolist()}"
-                )
+                if args.debug_latency:
+                    elapsed = max(now - report_start, 1e-9)
+                    fps = stats.count("work_ms") / elapsed
+                    opt_summary = optimizer_timing_summary(retargeter)
+                    print(
+                        f"latency-client sent={seq} fps={fps:.1f} "
+                        f"loop_ms avg/p95/max={stats.avg('loop_period_ms'):.1f}/"
+                        f"{stats.percentile('loop_period_ms', 95):.1f}/{stats.max('loop_period_ms'):.1f} "
+                        f"glove_ms avg/max={stats.avg('glove_ms'):.1f}/{stats.max('glove_ms'):.1f} "
+                        f"retarget_ms avg/p95/max={stats.avg('retarget_ms'):.1f}/"
+                        f"{stats.percentile('retarget_ms', 95):.1f}/{stats.max('retarget_ms'):.1f} "
+                        f"sendall_ms avg/max={stats.avg('sendall_ms'):.1f}/{stats.max('sendall_ms'):.1f} "
+                        f"work_ms avg/p95/max={stats.avg('work_ms'):.1f}/"
+                        f"{stats.percentile('work_ms', 95):.1f}/{stats.max('work_ms'):.1f} "
+                        f"behind_ms max={stats.max('behind_ms'):.1f} "
+                        f"cache_hits={int(stats.counters['cache_hits'])} "
+                        f"glove_age_ms max={stats.max('glove_age_ms'):.1f} "
+                        f"sdk_drained={int(stats.counters['sdk_drained'])} "
+                        f"{opt_summary}",
+                        flush=True,
+                    )
+                    stats.reset()
+                    report_start = now
+                    reset_optimizer_timing(retargeter)
+                else:
+                    print(
+                        f"sent={seq} "
+                        f"thumb={np.round(qpos[0], 3).tolist()} "
+                        f"index={np.round(qpos[1], 3).tolist()}"
+                    )
                 last_print = now
 
             time.sleep(interval)

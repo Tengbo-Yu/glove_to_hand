@@ -11,6 +11,7 @@ Usage:
 """
 
 from typing import Dict, Optional
+import time
 
 import numpy as np
 
@@ -62,6 +63,18 @@ class WujiGloveDevice(InputDeviceBase):
             "left_fingers": None,
             "right_fingers": None,
         }
+        self._debug_stats = {
+            "polls": 0,
+            "new_frames": 0,
+            "cache_hits": 0,
+            "drained_frames": 0,
+            "last_poll_new_frames": 0,
+            "last_poll_drained_frames": 0,
+            "last_cache_age_ms": None,
+            "last_recv_ms": 0.0,
+            "last_drain_ms": 0.0,
+        }
+        self._last_receive_monotonic = None
 
         manager = SdkManager.instance()
         if sn:
@@ -77,10 +90,26 @@ class WujiGloveDevice(InputDeviceBase):
             {"left_fingers": np.ndarray | None, "right_fingers": np.ndarray | None}
             Returns the cached previous frame when no new data is available.
         """
+        self._debug_stats["polls"] += 1
+        recv_start = time.perf_counter()
         skeleton = self._sub.recv()
+        self._debug_stats["last_recv_ms"] = (time.perf_counter() - recv_start) * 1000.0
         if skeleton is None:
+            self._debug_stats["cache_hits"] += 1
+            self._debug_stats["last_poll_new_frames"] = 0
+            self._debug_stats["last_poll_drained_frames"] = 0
+            self._debug_stats["last_drain_ms"] = 0.0
+            if self._last_receive_monotonic is None:
+                self._debug_stats["last_cache_age_ms"] = None
+            else:
+                self._debug_stats["last_cache_age_ms"] = (
+                    time.monotonic() - self._last_receive_monotonic
+                ) * 1000.0
             return self._last_data
 
+        new_frames = 1
+        drained = 0
+        drain_start = time.perf_counter()
         # Drain queue to keep only the latest frame,
         # preventing lag buildup when SDK pushes faster than we consume.
         while True:
@@ -88,6 +117,15 @@ class WujiGloveDevice(InputDeviceBase):
             if newer is None:
                 break
             skeleton = newer
+            new_frames += 1
+            drained += 1
+        self._debug_stats["last_drain_ms"] = (time.perf_counter() - drain_start) * 1000.0
+        self._debug_stats["new_frames"] += new_frames
+        self._debug_stats["drained_frames"] += drained
+        self._debug_stats["last_poll_new_frames"] = new_frames
+        self._debug_stats["last_poll_drained_frames"] = drained
+        self._debug_stats["last_cache_age_ms"] = 0.0
+        self._last_receive_monotonic = time.monotonic()
 
         # Extract 21 joint positions as (x, y, z) coordinates.
         keypoints = np.array(
@@ -110,6 +148,10 @@ class WujiGloveDevice(InputDeviceBase):
         result[f"{hand_side}_fingers"] = keypoints
         self._last_data = result
         return result
+
+    def get_debug_stats(self):
+        """Return non-mutating Wuji SDK freshness/debug counters."""
+        return dict(self._debug_stats)
 
     def cleanup(self):
         """Release SDK resources."""
