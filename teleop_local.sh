@@ -4,18 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # IP address of the machine running teleop_server.sh. Use 127.0.0.1 when both run locally.
-HAND_SERVER_HOST="192.168.123.164"
-HAND_SERVER_PORT="8766"
+HAND_SERVER_HOST="10.1.10.166"
+HAND_SERVER_PORT="8765"
 
 # Glove/hand side and wuji-sdk device name.
-HAND_SIDE="right"
+HAND_SIDE="left"
 GLOVE_NAME="glove"
 
 # Fill this if multiple Wuji gloves are online. Leave empty to auto-connect.
-GLOVE_SN=""
+# RIGHT_GLOVE_SN="WG1KA03260512012"
+# LEFT_GLOVE_SN="WG1JA03260517019"
+GLOVE_SN="WG1JA03260517019"
+
 
 CMD=(
-  conda run -n wuji python "$SCRIPT_DIR/glove_qpos_client.py"
+  python "$SCRIPT_DIR/glove_qpos_client.py"
   --host "$HAND_SERVER_HOST"
   --port "$HAND_SERVER_PORT"
   --hand "$HAND_SIDE"

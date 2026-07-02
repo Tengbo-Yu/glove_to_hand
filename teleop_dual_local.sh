@@ -16,9 +16,8 @@ LEFT_GLOVE_NAME="glove_l"
 RIGHT_GLOVE_NAME="glove_r"
 
 # Fill these if multiple Wuji gloves are online. Leave empty to auto-connect.
-# LEFT_GLOVE_SN="WG1KA03260512012"
+
 RIGHT_GLOVE_SN="WG1KA03260512012"
-# RIGHT_GLOVE_SN="WG1JA03260517019"
 LEFT_GLOVE_SN="WG1JA03260517019"
 
 pids=()
