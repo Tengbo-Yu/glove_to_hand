@@ -131,6 +131,7 @@ def parse_args():
     parser.add_argument("--debug-slow-ms", type=float, default=0.0, help="Print slow-frame details above this work time in ms. Default derives from --rate.")
     parser.add_argument("--print-qpos", action="store_true", help="Print every qpos matrix. This can block stdout and add latency.")
     parser.add_argument("--send-timeout", type=float, default=0.0, help="Optional socket send timeout in seconds after connect. Default 0 keeps blocking sends.")
+    parser.add_argument("--send-cached-frames", action="store_true", help="Also send cached glove frames when no fresh SDK frame is available. Default skips cached frames to avoid stale-command latency.")
     return parser.parse_args()
 
 
@@ -197,6 +198,7 @@ def run(args):
         slow_ms = args.debug_slow_ms if args.debug_slow_ms > 0 else max(50.0, 2.0 * interval_ms)
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
         seq = 0
+        skipped_cached = 0
         last_print = 0.0
         report_start = time.monotonic()
         last_loop_start = None
@@ -217,10 +219,10 @@ def run(args):
             fingers_pose = fingers_data[f"{args.hand}_fingers"]
             stats.add("glove_ms", glove_ms)
 
-            glove_debug = {}
-            if args.debug_latency and hasattr(input_device, "get_debug_stats"):
-                glove_debug = input_device.get_debug_stats()
-                stats.inc("cache_hits", 1 if glove_debug.get("last_poll_new_frames", 0) == 0 else 0)
+            glove_debug = input_device.get_debug_stats() if hasattr(input_device, "get_debug_stats") else {}
+            got_fresh_frame = glove_debug.get("last_poll_new_frames", 1) > 0
+            if args.debug_latency and glove_debug:
+                stats.inc("cache_hits", 1 if not got_fresh_frame else 0)
                 stats.inc("sdk_drained", glove_debug.get("last_poll_drained_frames", 0))
                 stats.add("glove_age_ms", glove_debug.get("last_cache_age_ms"))
                 stats.add("sdk_recv_ms", glove_debug.get("last_recv_ms"))
@@ -228,6 +230,28 @@ def run(args):
 
             if fingers_pose is None or np.allclose(fingers_pose, 0):
                 time.sleep(0.01)
+                continue
+            if not got_fresh_frame and not args.send_cached_frames:
+                skipped_cached += 1
+                stats.inc("skipped_cached")
+                now = time.monotonic()
+                if now - last_print >= args.print_every:
+                    if args.debug_latency:
+                        elapsed = max(now - report_start, 1e-9)
+                        print(
+                            f"latency-client sent={seq} fps={stats.count('work_ms') / elapsed:.1f} "
+                            f"skipped_cached={int(stats.counters['skipped_cached'])} "
+                            f"cache_hits={int(stats.counters['cache_hits'])} "
+                            f"glove_age_ms max={stats.max('glove_age_ms'):.1f} "
+                            f"sdk_drained={int(stats.counters['sdk_drained'])}",
+                            flush=True,
+                        )
+                        stats.reset()
+                        report_start = now
+                    else:
+                        print(f"sent={seq} skipped_cached={skipped_cached}")
+                    last_print = now
+                time.sleep(0.001)
                 continue
 
             retarget_ms = 0.0

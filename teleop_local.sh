@@ -26,7 +26,7 @@ CMD=(
   --port "$HAND_SERVER_PORT"
   --hand "$HAND_SIDE"
   --device-name "$GLOVE_NAME"
-  --rate 60
+  --rate 20
   --print-every "$PRINT_EVERY"
 )
 
