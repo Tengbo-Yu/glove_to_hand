@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Fill this if multiple hands are connected. Leave empty to let wujihandpy auto-select.
-HAND_SERIAL=""
+HAND_SERIAL="337338793233" #right hand
+HAND_SERIAL="3378387C3233" #left hand
 
 # Port the glove client will connect to. Must match teleop_client.sh.
 PORT="8765"
