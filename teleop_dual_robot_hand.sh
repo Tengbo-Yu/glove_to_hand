@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Robot side: receive retargeted qpos for both hands and drive both Wuji Hands.
 LEFT_PORT="${LEFT_PORT:-8765}"
-RIGHT_PORT="${RIGHT_PORT:-8766}"
+RIGHT_PORT="${RIGHT_PORT:-8767}"
 LEFT_HAND_SERIAL="${LEFT_HAND_SERIAL:-3378387C3233}"
 RIGHT_HAND_SERIAL="${RIGHT_HAND_SERIAL:-337338793233}"
 CONTROL_RATE="${CONTROL_RATE:-60}"
