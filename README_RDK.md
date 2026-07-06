@@ -93,6 +93,42 @@ bash setup_wired_network.sh local <网口名>
 bash setup_wired_network.sh host <网口名>
 ```
 
+## RDK 双网口建议配置
+
+RDK 端建议两个有线网口分开使用：
+
+```text
+eth0             -> Wuji 手套网络，192.168.1.20/24
+enx00e04c584b78  -> RDK 到主机，192.168.126.10/24
+wlan0            -> SSH/普通网络，10.1.10.x
+```
+
+配置 RDK 到主机的专用网口：
+
+```bash
+bash setup_wired_network.sh local enx00e04c584b78
+```
+
+恢复/设置 Wuji 手套网口：
+
+```bash
+sudo ip addr del 192.168.126.10/24 dev eth0 2>/dev/null || true
+sudo ip addr add 192.168.1.20/24 dev eth0 2>/dev/null || true
+sudo ip link set eth0 up
+sudo ip route replace 192.168.1.100/32 dev eth0 src 192.168.1.20
+sudo ip route replace 192.168.1.101/32 dev eth0 src 192.168.1.20
+sudo ip neigh flush to 192.168.1.100
+sudo ip neigh flush to 192.168.1.101
+```
+
+检查路由：
+
+```bash
+ip route get 192.168.126.20   # 应该走 enx00e04c584b78
+ip route get 192.168.1.100    # 应该走 eth0
+ip route get 192.168.1.101    # 应该走 eth0
+```
+
 ## 检查
 
 ```bash

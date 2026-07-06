@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Fill these if multiple hands are connected. Leave empty to let wujihandpy auto-select.
 LEFT_HAND_SERIAL="3378387C3233"
-RIGHT_HAND_SERIAL="3378387E3233"
+RIGHT_HAND_SERIAL="337338793233"
 
 # One server per hand, each on its own port. Clients must use the matching ports.
 LEFT_PORT="8765"
