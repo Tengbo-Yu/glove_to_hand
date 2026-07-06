@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Host side: receive one hand's keypoints from RDK, retarget, and forward qpos to robot.
+HAND_SIDE="${HAND_SIDE:-left}"
+ROBOT_HAND_HOST="${ROBOT_HAND_HOST:-127.0.0.1}"
+LEFT_PORT="${LEFT_PORT:-8765}"
+RIGHT_PORT="${RIGHT_PORT:-8766}"
+CONTROL_RATE="${CONTROL_RATE:-60}"
+PRINT_EVERY="${PRINT_EVERY:-0.5}"
+RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0.6}"
+DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
+
+case "$HAND_SIDE" in
+  left)
+    LISTEN_PORT="${LISTEN_PORT:-$LEFT_PORT}"
+    ROBOT_HAND_PORT="${ROBOT_HAND_PORT:-$LEFT_PORT}"
+    ;;
+  right)
+    LISTEN_PORT="${LISTEN_PORT:-$RIGHT_PORT}"
+    ROBOT_HAND_PORT="${ROBOT_HAND_PORT:-$RIGHT_PORT}"
+    ;;
+  *)
+    echo "ERROR: HAND_SIDE must be 'left' or 'right', got '$HAND_SIDE'." >&2
+    exit 1
+    ;;
+esac
+
+CMD=(
+  python "$SCRIPT_DIR/host_retarget_bridge.py"
+  --bind-host 0.0.0.0
+  --listen-port "$LISTEN_PORT"
+  --robot-host "$ROBOT_HAND_HOST"
+  --robot-port "$ROBOT_HAND_PORT"
+  --hand "$HAND_SIDE"
+  --print-every "$PRINT_EVERY"
+  --retarget-lp-alpha "$RETARGET_LP_ALPHA"
+)
+
+if [[ "$DEBUG_LATENCY" == "1" ]]; then
+  CMD+=(--debug-latency)
+fi
+
+echo "Host retarget bridge: RDK:$LISTEN_PORT -> robot $ROBOT_HAND_HOST:$ROBOT_HAND_PORT ($HAND_SIDE)"
+"${CMD[@]}"
