@@ -15,7 +15,6 @@ CONTROL_RATE="${CONTROL_RATE:-60}"
 LOWPASS="${LOWPASS:-15}"
 SMOOTH_TAU="${SMOOTH_TAU:-0.05}"
 RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0.6}"
-INVERT_COMMAND_DIRECTION="${INVERT_COMMAND_DIRECTION:-1}"
 
 pids=()
 cleanup() {
@@ -46,9 +45,6 @@ start_server() {
   )
   if [[ -n "$serial" ]]; then
     cmd+=(--hand-serial "$serial")
-  fi
-  if [[ "$INVERT_COMMAND_DIRECTION" == "1" ]]; then
-    cmd+=(--invert-command-direction)
   fi
   if [[ "${DEBUG_LATENCY:-0}" == "1" ]]; then
     cmd+=(--debug-latency --print-every "${PRINT_EVERY:-0.5}")
