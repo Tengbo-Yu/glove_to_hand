@@ -155,6 +155,7 @@ def parse_args():
     parser.add_argument("--smooth-tau", type=float, default=0.05, help="Output qpos smoothing time constant in seconds. Lower is faster; higher is smoother.")
     parser.add_argument("--max-joint-velocity", type=float, default=0.0, help="Optional output slew limit in rad/s. 0 disables slew limiting.")
     parser.add_argument("--disable-output-smoothing", action="store_true", help="Send each retargeted qpos directly without output smoothing/resampling.")
+    parser.add_argument("--invert-command-direction", action=argparse.BooleanOptionalAction, default=False, help="Invert commanded joint deltas around the first received target. Use when hardware motion is opposite to retargeted qpos.")
     parser.add_argument("--retarget-lp-alpha", type=float, default=0.0, help="Override retargeter low-pass alpha. 0 keeps config value.")
     parser.add_argument("--print-every", type=float, default=1.0, help="Seconds between status prints.")
     parser.add_argument("--socket-timeout", type=float, default=1.0, help="Seconds to wait for a glove frame before printing a timeout warning.")
@@ -328,6 +329,7 @@ def serve_connection(conn, peer, args, stop_requested):
         last_seq = None
         received = 0
         last_qpos = None
+        command_center_qpos = None
         smoother = QposSmoother(
             tau=args.smooth_tau,
             max_velocity=args.max_joint_velocity,
@@ -393,7 +395,13 @@ def serve_connection(conn, peer, args, stop_requested):
                     last_qpos = message["qpos"]
                     new_target = True
                 if new_target:
-                    smoother.set_target(last_qpos)
+                    command_qpos = last_qpos
+                    if args.invert_command_direction:
+                        if command_center_qpos is None:
+                            command_center_qpos = last_qpos.copy()
+                            print("Command direction inversion enabled around first received target.")
+                        command_qpos = 2.0 * command_center_qpos - last_qpos
+                    smoother.set_target(command_qpos)
                 stats.add("retarget_ms", retarget_ms)
                 frame_ms = (time.perf_counter() - frame_start) * 1000.0
                 stats.add("server_frame_ms", frame_ms)

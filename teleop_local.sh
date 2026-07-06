@@ -8,13 +8,13 @@ HAND_SERVER_HOST="10.1.10.166"
 HAND_SERVER_PORT="8765"
 
 # Glove/hand side and wuji-sdk device name.
-HAND_SIDE="left"
+HAND_SIDE="right"
 GLOVE_NAME="glove"
 
 # Fill this if multiple Wuji gloves are online. Leave empty to auto-connect.
 # RIGHT_GLOVE_SN="WG1KA03260512012"
 # LEFT_GLOVE_SN="WG1JA03260517019"
-GLOVE_SN="WG1JA03260517019"
+GLOVE_SN="WG1KA03260512012"
 
 # Set DEBUG_LATENCY=1 to print stage timing instead of only qpos summaries.
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"

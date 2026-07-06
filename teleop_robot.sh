@@ -13,6 +13,7 @@ CONTROL_RATE="${CONTROL_RATE:-60}"
 LOWPASS="${LOWPASS:-15}"
 SMOOTH_TAU="${SMOOTH_TAU:-0.05}"
 RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0.6}"
+INVERT_COMMAND_DIRECTION="${INVERT_COMMAND_DIRECTION:-1}"
 
 CMD=(
   python "$SCRIPT_DIR/hand_qpos_server.py"
@@ -30,6 +31,10 @@ CMD=(
 
 if [[ -n "$HAND_SERIAL" ]]; then
   CMD+=(--hand-serial "$HAND_SERIAL")
+fi
+
+if [[ "${INVERT_COMMAND_DIRECTION:-0}" == "1" ]]; then
+  CMD+=(--invert-command-direction)
 fi
 
 if [[ "${DEBUG_LATENCY:-0}" == "1" ]]; then

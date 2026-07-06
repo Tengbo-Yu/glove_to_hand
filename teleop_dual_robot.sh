@@ -11,6 +11,12 @@ RIGHT_HAND_SERIAL="3378387E3233"
 LEFT_PORT="8765"
 RIGHT_PORT="8766"
 
+CONTROL_RATE="${CONTROL_RATE:-60}"
+LOWPASS="${LOWPASS:-15}"
+SMOOTH_TAU="${SMOOTH_TAU:-0.05}"
+RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0.6}"
+INVERT_COMMAND_DIRECTION="${INVERT_COMMAND_DIRECTION:-1}"
+
 pids=()
 cleanup() {
   trap - INT TERM
@@ -32,11 +38,20 @@ start_server() {
     --hand "$side"
     --enable-hand
     --rate 60
-    --lowpass 10
+    --control-rate "$CONTROL_RATE"
+    --lowpass "$LOWPASS"
+    --smooth-tau "$SMOOTH_TAU"
+    --retarget-lp-alpha "$RETARGET_LP_ALPHA"
     --home-duration 2
   )
   if [[ -n "$serial" ]]; then
     cmd+=(--hand-serial "$serial")
+  fi
+  if [[ "$INVERT_COMMAND_DIRECTION" == "1" ]]; then
+    cmd+=(--invert-command-direction)
+  fi
+  if [[ "${DEBUG_LATENCY:-0}" == "1" ]]; then
+    cmd+=(--debug-latency --print-every "${PRINT_EVERY:-0.5}")
   fi
   "${cmd[@]}" &
   pids+=("$!")

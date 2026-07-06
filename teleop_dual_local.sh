@@ -6,8 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # IP address(es) of the machine(s) running the hand servers.
 # When the hands are on the same machine, both hosts are the same IP.
 # Use 127.0.0.1 only when the dual clients and dual servers run on this same machine.
-LEFT_HAND_SERVER_HOST="192.168.123.164"
-RIGHT_HAND_SERVER_HOST="192.168.123.164"
+LEFT_HAND_SERVER_HOST="10.1.10.166"
+RIGHT_HAND_SERVER_HOST="10.1.10.166"
 LEFT_PORT="8765"
 RIGHT_PORT="8766"
 
