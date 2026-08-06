@@ -11,7 +11,7 @@ CMD=(
   --hand "$HAND_SIDE"
   --duration "${DURATION:-100}"
   --rate "${RATE:-60}"
-  --current-limit "${CURRENT_LIMIT:-1.0}"
+  --current-limit "${CURRENT_LIMIT:-1.5}"
   --no-home-on-shutdown
 )
 if [[ "$ENABLE_HAND2" == "1" ]]; then

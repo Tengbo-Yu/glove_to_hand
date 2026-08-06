@@ -14,7 +14,7 @@ CMD=(
   --left-hand-sn "${LEFT_HAND_SN:-}"
   --right-hand-sn "${RIGHT_HAND_SN:-}"
   --rate "${RATE:-60}"
-  --current-limit "${CURRENT_LIMIT:-1.0}"
+  --current-limit "${CURRENT_LIMIT:-1.5}"
   --no-home-on-shutdown
 )
 if [[ "$ENABLE_HAND2" == "1" ]]; then
