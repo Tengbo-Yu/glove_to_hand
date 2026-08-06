@@ -25,7 +25,9 @@ class ReadLatestQposTest(unittest.TestCase):
             client_sock.sendall(encode_message(make_hello_message("left", time.time())))
             for seq in range(3):
                 qpos = np.full((5, 4), seq, dtype=np.float64)
-                client_sock.sendall(encode_message(make_qpos_message(seq, qpos, time.time())))
+                client_sock.sendall(
+                    encode_message(make_qpos_message(seq, qpos, time.time(), "left"))
+                )
 
             start = time.monotonic()
             message, dropped = read_latest_qpos(reader)
@@ -46,7 +48,9 @@ class ReadLatestQposTest(unittest.TestCase):
 
             for seq in range(2):
                 qpos = np.full((5, 4), seq, dtype=np.float64)
-                client_sock.sendall(encode_message(make_qpos_message(seq, qpos, time.time())))
+                client_sock.sendall(
+                    encode_message(make_qpos_message(seq, qpos, time.time(), "left"))
+                )
 
             metrics = {}
             message, dropped = read_latest_qpos(reader, metrics)
@@ -68,11 +72,14 @@ class ProtocolDebugTest(unittest.TestCase):
             7,
             qpos,
             123.0,
+            "right",
             debug={"client_retarget_ms": 4.2, "client_sdk_drained": 3},
         )
         decoded = decode_message(encode_message(message))
 
         self.assertEqual(decoded["seq"], 7)
+        self.assertEqual(decoded["hand_side"], "right")
+        self.assertEqual(decoded["joint_order"], "device")
         self.assertEqual(decoded["debug"]["client_retarget_ms"], 4.2)
         self.assertEqual(decoded["debug"]["client_sdk_drained"], 3)
     def test_keypoints_metadata_round_trips(self):
@@ -91,6 +98,19 @@ class ProtocolDebugTest(unittest.TestCase):
         self.assertEqual(decoded["hand_side"], "left")
         self.assertEqual(decoded["keypoints"].shape, (21, 3))
         self.assertEqual(decoded["debug"]["client_glove_ms"], 0.2)
+
+    def test_rejects_qpos_without_verified_device_order(self):
+        qpos = np.zeros((5, 4), dtype=np.float64)
+        message = make_qpos_message(1, qpos, time.time(), "right")
+        message["joint_order"] = "urdf"
+        with self.assertRaisesRegex(ValueError, "joint_order='device'"):
+            decode_message(encode_message(message))
+
+    def test_rejects_nonfinite_qpos(self):
+        qpos = np.zeros((5, 4), dtype=np.float64)
+        qpos[0, 0] = np.nan
+        with self.assertRaisesRegex(ValueError, "finite"):
+            make_qpos_message(1, qpos, time.time(), "right")
 
 
 if __name__ == "__main__":

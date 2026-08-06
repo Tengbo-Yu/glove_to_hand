@@ -1,28 +1,22 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
+HAND_SIDE="${HAND_SIDE:-right}"
+ENABLE_HAND2="${ENABLE_HAND2:-0}"
 
-# conda run -n wuji python "$SCRIPT_DIR/glove_to_hand.py" \
-# --enable-hand \
-# --duration 100 \
-# --rate 60 \
-# --lowpass 10 \
-# --gain -1.5 \
-# --max-delta 1.2 \
-# --joint-gains "-1.5,-1.5,-1.5,-1.5, -1.5,-0.7,-1.5,-1.5, -1.5,-0.7,-1.5,-1.5, -1.5,-0.1,-1.5,-1.5, -1.5,-0.1,-1.5,-1.5" \
-# --joint-max-deltas "1.2,1.2,1.2,1.2, 1.2,1.0,1.2,1.2, 1.2,1.0,1.2,1.2, 1.2,0.1,1.2,1.2, 1.2,0.1,1.2,1.2" \
-# --invert-side-sway \
-# --max-velocity 3.0 \
-# --confidence-threshold 0.3 \
-# --home-duration 5 \
-# --diagnostics
-
-
-conda run -n wuji python "$SCRIPT_DIR/glove_to_hand.py" \
---enable-hand \
---duration 100 \
---hand left \
---home-duration 2 \
---rate 60 \
---lowpass 10 
+CMD=(
+  conda run -n "$WUJI_CONDA_ENV" python "$PROJECT_ROOT/glove_to_hand.py"
+  --hand "$HAND_SIDE"
+  --duration "${DURATION:-100}"
+  --rate "${RATE:-60}"
+  --current-limit "${CURRENT_LIMIT:-1.0}"
+  --no-home-on-shutdown
+)
+if [[ "$ENABLE_HAND2" == "1" ]]; then
+  CMD+=(--enable-hand)
+else
+  echo "Dry run only. Set ENABLE_HAND2=1 to explicitly enable Wuji Hand 2."
+fi
+"${CMD[@]}"

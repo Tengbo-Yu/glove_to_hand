@@ -1,37 +1,14 @@
 import argparse
 import signal
 import socket
-import sys
 import time
 from collections import defaultdict
-from pathlib import Path
 
 import numpy as np
 
 from qpos_protocol import encode_message, make_hello_message, make_keypoints_message, make_qpos_message
-
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-RETARGETING_ROOT = PROJECT_ROOT / "wuji-retargeting"
-RETARGETING_EXAMPLE = RETARGETING_ROOT / "example"
-
-for path in (RETARGETING_ROOT, RETARGETING_EXAMPLE):
-    path_str = str(path)
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
-
-from input_devices.wuji_glove_device import WujiGloveDevice
-
-
-
-def resolve_config(config, hand_side):
-    if config:
-        return Path(config).expanduser().resolve()
-    return (
-        RETARGETING_EXAMPLE
-        / "config"
-        / f"adaptive_analytical_wuji_glove_{hand_side}.yaml"
-    )
+from retargeting_hand2 import Hand2RetargetPipeline
+from wuji_glove_input import WujiGloveDevice
 
 
 class IntervalStats:
@@ -118,12 +95,12 @@ def parse_args():
     )
     parser.add_argument("--host", default="192.168.123.164", help="hand_qpos_server host/IP.")
     parser.add_argument("--port", type=int, default=8765, help="hand_qpos_server TCP port.")
-    parser.add_argument("--hand", default="right", choices=("left", "right"), help="Glove/hand side.")
+    parser.add_argument("--hand", default="right", choices=("left", "right"), help="Glove/Hand 2 side.")
     parser.add_argument("--glove-sn", default="", help="Wuji Glove serial number. Use when multiple Wuji devices are online.")
     parser.add_argument("--device-name", default="glove", help="wuji_sdk device name for Wuji Glove.")
-    parser.add_argument("--config", default=None, help="Retargeting YAML config path. Used only when --stream-mode=qpos.")
+    parser.add_argument("--config", default=None, help="Hand 2 retargeting YAML. Used only for --stream-mode=qpos.")
     parser.add_argument("--stream-mode", choices=("keypoints", "qpos"), default="keypoints", help="Send raw glove keypoints for robot-side retargeting, or retarget locally and send qpos.")
-    parser.add_argument("--glove-stream", choices=("hand_skeleton", "offline_hand_skeleton", "emf_poses"), default="offline_hand_skeleton", help="Wuji SDK stream for keypoint input. offline_hand_skeleton subscribes to emf_poses and computes skeletons in this process to avoid the SDK hand_skeleton background handler.")
+    parser.add_argument("--glove-stream", choices=("hand_skeleton", "offline_hand_skeleton"), default="offline_hand_skeleton", help="Wuji SDK stream for keypoint input.")
     parser.add_argument("--wuji-log-level", default="error", choices=("trace", "debug", "info", "warn", "warning", "error", "off"), help="wuji_sdk internal log level.")
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Frame send rate in Hz.")
@@ -155,12 +132,13 @@ def open_socket(host, port, connect_timeout):
 
 
 def run(args):
-    config_path = resolve_config(args.config, args.hand) if args.stream_mode == "qpos" else None
-    if config_path is not None and not config_path.exists():
-        raise FileNotFoundError(f"Retargeting config not found: {config_path}")
-
-    if config_path is not None:
-        print(f"Config: {config_path}")
+    pipeline = (
+        Hand2RetargetPipeline(args.config, args.hand)
+        if args.stream_mode == "qpos"
+        else None
+    )
+    if pipeline is not None:
+        print(f"Config: {pipeline.config_path}")
     else:
         print("Config: robot-side retargeting (--stream-mode=keypoints)")
     print(f"Stream mode: {args.stream_mode}")
@@ -177,10 +155,7 @@ def run(args):
         stream=args.glove_stream,
         sdk_log_level=args.wuji_log_level,
     )
-    retargeter = None
-    if config_path is not None:
-        from wuji_retargeting import Retargeter
-        retargeter = Retargeter.from_yaml(str(config_path), args.hand)
+    retargeter = pipeline.retargeter if pipeline is not None else None
 
     sock = None
     stop_requested = False
@@ -265,7 +240,7 @@ def run(args):
             qpos = None
             if args.stream_mode == "qpos":
                 retarget_start = time.perf_counter()
-                qpos = retargeter.retarget(fingers_pose).reshape(5, 4)
+                qpos = pipeline.retarget(fingers_pose).reshape(5, 4)
                 retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
                 stats.add("retarget_ms", retarget_ms)
                 if args.print_qpos:
@@ -283,7 +258,9 @@ def run(args):
 
             encode_start = time.perf_counter()
             if args.stream_mode == "qpos":
-                message = make_qpos_message(seq, qpos, time.time(), debug=debug_payload)
+                message = make_qpos_message(
+                    seq, qpos, time.time(), args.hand, debug=debug_payload
+                )
             else:
                 message = make_keypoints_message(seq, fingers_pose, time.time(), args.hand, debug=debug_payload)
             payload = encode_message(message)

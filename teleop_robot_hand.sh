@@ -2,27 +2,38 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
+if [[ "${ENABLE_HAND2:-0}" != "1" ]]; then
+  echo "Refusing to energize Hand 2. Re-run with ENABLE_HAND2=1." >&2
+  exit 2
+fi
 
-# Robot side: receive retargeted qpos from the host and drive the Wuji Hand.
-HAND_SIDE="${HAND_SIDE:-left}"
+# Robot side: receive verified device-order qpos and drive one network Hand 2.
+HAND_SIDE="${HAND_SIDE:-right}"
 LEFT_PORT="${LEFT_PORT:-8765}"
 RIGHT_PORT="${RIGHT_PORT:-8767}"
-LEFT_HAND_SERIAL="${LEFT_HAND_SERIAL:-3378387C3233}"
-RIGHT_HAND_SERIAL="${RIGHT_HAND_SERIAL:-337338793233}"
+LEFT_HAND_SN="${LEFT_HAND_SN:-}"
+RIGHT_HAND_SN="${RIGHT_HAND_SN:-}"
+LEFT_HAND_ADDRESS="${LEFT_HAND_ADDRESS:-}"
+RIGHT_HAND_ADDRESS="${RIGHT_HAND_ADDRESS:-}"
 CONTROL_RATE="${CONTROL_RATE:-60}"
-LOWPASS="${LOWPASS:-15}"
 SMOOTH_TAU="${SMOOTH_TAU:-0.05}"
+KP="${KP:-3.0}"
+KD="${KD:-0.1}"
+CURRENT_LIMIT="${CURRENT_LIMIT:-1.5}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
 
 case "$HAND_SIDE" in
   left)
     PORT="${PORT:-$LEFT_PORT}"
-    HAND_SERIAL="$LEFT_HAND_SERIAL"
+    HAND_SN="$LEFT_HAND_SN"
+    HAND_ADDRESS="$LEFT_HAND_ADDRESS"
     ;;
   right)
     PORT="${PORT:-$RIGHT_PORT}"
-    HAND_SERIAL="$RIGHT_HAND_SERIAL"
+    HAND_SN="$RIGHT_HAND_SN"
+    HAND_ADDRESS="$RIGHT_HAND_ADDRESS"
     ;;
   *)
     echo "ERROR: HAND_SIDE must be 'left' or 'right', got '$HAND_SIDE'." >&2
@@ -31,25 +42,29 @@ case "$HAND_SIDE" in
 esac
 
 CMD=(
-  python "$SCRIPT_DIR/hand_qpos_server.py"
+  conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/hand_qpos_server.py"
   --bind-host 0.0.0.0
   --port "$PORT"
   --hand "$HAND_SIDE"
   --enable-hand
   --keep-listening
-  --rate 60
   --control-rate "$CONTROL_RATE"
-  --lowpass "$LOWPASS"
   --smooth-tau "$SMOOTH_TAU"
-  --home-duration 2
+  --kp "$KP"
+  --kd "$KD"
+  --current-limit "$CURRENT_LIMIT"
+  --no-home-on-shutdown
 )
 
-if [[ -n "$HAND_SERIAL" ]]; then
-  CMD+=(--hand-serial "$HAND_SERIAL")
+if [[ -n "$HAND_SN" ]]; then
+  CMD+=(--hand-sn "$HAND_SN")
+fi
+if [[ -n "$HAND_ADDRESS" ]]; then
+  CMD+=(--hand-address "$HAND_ADDRESS")
 fi
 if [[ "$DEBUG_LATENCY" == "1" ]]; then
   CMD+=(--debug-latency --print-every "$PRINT_EVERY")
 fi
 
-echo "Robot hand qpos server: $HAND_SIDE on port $PORT serial=$HAND_SERIAL"
+echo "Robot Hand 2 server: $HAND_SIDE port=$PORT sn=${HAND_SN:-auto} address=${HAND_ADDRESS:-auto}"
 "${CMD[@]}"

@@ -1,204 +1,125 @@
-# Wuji Glove 控制 Wuji Hand
+# Wuji Glove → Wuji Hand 2
 
-## 环境
+本项目已迁移到 **Wuji Hand 2（以太网）**。旧版 Wuji Hand 的
+`wujihandpy`、USB 串口、USB serial 和 `realtime_controller` 均不再用于活动链路。
 
-本项目使用 `wuji` conda 环境：
+当前验证组合：
 
-```bash
-conda activate wuji
-```
+- Wuji Hand 2 固件：`2.2.3`
+- `wuji-sdk==2026.8.3`
+- `wuji-retargeting==2026.8.3`
+- Conda 环境：`wuji_new`
 
-如果 SDK 还没有安装：
-
-```bash
-conda run -n wuji python -m pip install wuji-sdk wujihandpy
-```
-
-## 检查 Wuji Hand 是否被系统识别
-
-Wuji Hand 通过 USB 连接。接好供电和 USB 后，先检查 Linux 是否能看到设备：
+## 1. 安装与模型
 
 ```bash
-lsusb | grep -i "0483\|wuji"
+git -C wuji-retargeting submodule update --init --recursive
+conda run -n wuji_new python -m pip install -r requirements.txt
 ```
 
-正常会看到类似输出：
+`pin 3.8.0` 的 wheel 依赖 urdfdom 4 / tinyxml2 10 ABI；不要删除
+`requirements.txt` 中的 `cmeel-urdfdom==4.0.1` 和
+`cmeel-tinyxml2==10.0.0` 约束。
+
+验证导入：
+
+```bash
+conda run -n wuji_new python -c "from wuji_retargeting import Retargeter; print('retargeting OK')"
+```
+
+## 2. Hand 2 网络与只读检查
+
+Hand 2 使用静态地址：左手通常为 `192.168.1.110`，右手通常为
+`192.168.1.111`。主机对应网卡必须位于 `192.168.1.0/24`。
+
+优先按 SN 或扫描结果连接，不要硬编码端口；本机右手扫描结果为
+`WH2KA01260730030 @ 192.168.1.111:7447`。
+
+只读检查（不会使能）：
+
+```bash
+conda run -n wuji_new python wuji_hand_test.py --hand right
+```
+
+白色呼吸灯表示全部在线关节就绪、未使能。只有显式传入运动开关才会使能：
+
+```bash
+conda run -n wuji_new python wuji_hand_test.py \
+  --hand right --enable-motion --joint 4 --delta 0.05
+```
+
+## 3. 单机手套重定向
+
+先进行干跑，只打印 Hand 2 设备顺序的关节目标：
+
+```bash
+conda run -n wuji_new python glove_to_hand.py \
+  --hand right --glove-sn <RIGHT_GLOVE_SN> --duration 10
+```
+
+确认关键点、手性、关节顺序和工作空间后，才显式使能：
+
+```bash
+conda run -n wuji_new python glove_to_hand.py \
+  --hand right --glove-sn <RIGHT_GLOVE_SN> \
+  --hand-sn WH2KA01260730030 \
+  --enable-hand --current-limit 1.0 --duration 10
+```
+
+默认配置自动选择：
 
 ```text
-Bus 001 Device 015: ID 0483:2000 STMicroelectronics WUJIHAND
+adaptive_analytical_wuji_glove_wuji_hand_2_right.yaml
+adaptive_analytical_wuji_glove_wuji_hand_2_left.yaml
 ```
 
-其中 `0483:2000` 是 Wuji Hand 的 USB VID/PID。
+代码会按关节名验证并执行 `URDF → MJCF/设备` 重排；映射失败时拒绝启动，
+不会把未验证顺序的 qpos 发给硬件。
 
-如果没有看到设备：
+## 4. 三端链路
 
-- 确认 Wuji Hand 已供电；
-- 确认 USB 线接到了电脑；
-- 如果 USB-C to USB-C 不能识别，换 USB-A to USB-C 线再试；
-- 重新插拔 USB 后再次运行 `lsusb`。
-
-## 检查 Python SDK 是否能连接 Wuji Hand
-
-设备被 `lsusb` 识别后，运行：
-
-```bash
-conda run -n wuji python -c "import wujihandpy; hand = wujihandpy.Hand(); print('connected'); print('product_sn:', hand.get_product_sn()); print('handedness:', hand.read_handedness())"
-```
-
-如果连接成功，会打印：
+链路为：
 
 ```text
-connected
-product_sn: ...
-handedness: ...
+RDK（手套 keypoints） → 主机（Hand 2 retargeting） → 机器人端（Hand 2）
 ```
 
-`handedness` 中通常 `0` 表示右手，`1` 表示左手。
-
-## 处理 USB 权限不足
-
-如果 Python SDK 报错类似：
-
-```text
-Ignored because device could not be opened: -3 (ERROR_ACCESS)
-ConnectionError: Failed to init.
-```
-
-说明系统已经识别到设备，但当前用户没有 USB 读写权限。执行：
+机器人端先启动。启动脚本必须显式设置 `ENABLE_HAND2=1`：
 
 ```bash
-sudo mkdir -p /etc/udev/rules.d
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="0483", MODE="0666"' | sudo tee /etc/udev/rules.d/95-wujihand.rules
-sudo udevadm control --reload-rules
-sudo udevadm trigger
+HAND_SIDE=right ENABLE_HAND2=1 bash teleop_robot_hand.sh
 ```
 
-然后拔掉 Wuji Hand 的 USB，再重新插上。
-
-重新测试：
+主机端：
 
 ```bash
-conda run -n wuji python -c "import wujihandpy; hand = wujihandpy.Hand(); print('connected'); print('product_sn:', hand.get_product_sn()); print('handedness:', hand.read_handedness())"
+HAND_SIDE=right ROBOT_HAND_HOST=<ROBOT_IP> bash teleop_host_bridge.sh
 ```
 
-## 查询 USB 序列号
-
-如果电脑上连接了多只 Wuji Hand，需要指定 USB 序列号。查询方式：
+RDK 端：
 
 ```bash
-lsusb -v -d 0483:2000 | grep iSerial
+HAND_SIDE=right HOST_RETARGET_HOST=<HOST_IP> bash teleop_rdk_keypoints.sh
 ```
 
-然后在代码中指定：
+所有脚本默认使用 `wuji_new`；可通过 `WUJI_CONDA_ENV=<name>` 覆盖。
+网络协议为 `glove-qpos-v2`，qpos 帧必须携带正确手性并声明
+`joint_order=device`，旧版 v1 客户端会被明确拒绝。
 
-```python
-import wujihandpy
+双手与专用有线网配置见 [README_RDK.md](README_RDK.md)。
 
-hand = wujihandpy.Hand(serial_number="你的USB序列号")
-```
+## 5. 主要入口
 
-## 保守动作测试
+| 文件 | 用途 |
+|---|---|
+| `hand2_backend.py` | Hand 2 发现、连接、诊断、MIT 参数、使能和命令发布 |
+| `retargeting_hand2.py` | Hand 2 配置及 URDF→设备关节顺序验证 |
+| `wuji_glove_input.py` | 手套输入、offline skeleton 和延迟统计 |
+| `glove_to_hand.py` | 单机单手 |
+| `glove_to_hand_dual.py` | 单机双手 |
+| `glove_qpos_client.py` | RDK keypoints/qpos 客户端 |
+| `host_retarget_bridge.py` | 主机重定向桥 |
+| `hand_qpos_server.py` | 机器人端 Hand 2 服务 |
 
-确认 SDK 可以连接后，再做小幅动作测试。运行前确保手指周围没有障碍物：
-
-```bash
-conda run -n wuji python - <<'PY'
-import time
-import wujihandpy
-
-hand = wujihandpy.Hand()
-try:
-    hand.write_joint_enabled(True)
-    print("enabled")
-    hand.finger(1).joint(0).write_joint_target_position(0.3)
-    time.sleep(0.5)
-    hand.finger(1).joint(0).write_joint_target_position(0.0)
-    time.sleep(0.5)
-finally:
-    hand.write_joint_enabled(False)
-    print("disabled")
-PY
-```
-
-这里的 `finger(1)` 是食指，`joint(0)` 是食指近端关节，`0.3 rad` 是比较保守的小幅度。
-
-## 检查 Wuji Glove 是否连接
-
-Wuji Glove 通过以太网连接。使用 Wuji SDK 扫描：
-
-```bash
-conda run -n wuji python -c "from wuji_sdk import SdkManager; m = SdkManager.instance(); print(m.scan())"
-```
-
-正常会看到类似：
-
-```text
-[DiscoveredDevice(sn='WG1JA03260517019', address='192.168.1.100:50001')]
-```
-
-如果连接时报：
-
-```text
-Session already exists (0x0013)
-```
-
-说明 glove 已经被另一个 SDK 会话占用。处理方式：
-
-- 关闭 Wuji Studio 或其他正在使用 glove 的 Python 脚本；
-- 如果没有明显占用进程，给 glove 断电/重新插拔网络连接后再试；
-- 重新运行脚本前，等待几秒让设备端 session 清理完成。
-
-## 读取 Wuji Glove 关节角数据
-
-```bash
-conda run -n wuji python - <<'PY'
-import asyncio
-from wuji_sdk import SdkManager
-
-async def main():
-    manager = SdkManager.instance()
-    glove = manager.auto_connect("glove_0")
-    sub = glove.hand_joint_angles().subscribe()
-    frame = await sub.recv_async()
-    for i, finger in enumerate(frame.fingers):
-        print(i, "angles=", list(finger.angles), "confidence=", finger.confidence)
-    sub.close()
-    manager.disconnect_all()
-
-asyncio.run(main())
-PY
-```
-
-## Glove 控制 Hand
-
-```bash
-机器人
-cd glove_to_hand
-bash teleop_dual_server.sh
-
-主机
-cd glove_to_hand
-bash teleop_dual_client.sh
-```
-
-
-### 设置连接网口
-```bash
-ip route get 192.168.1.100
-ip route get 192.168.1.101
-
-ifconfig
-
-sudo ip route replace 192.168.1.100/32 dev enxe466e5832575(对应网口编号) src 192.168.1.xxx(对应设置的本机ip)
-sudo ip neigh flush to 192.168.1.100
-
-
-for RDK_X5
-
-  sudo ip addr add 192.168.1.20/24 dev eth0
-  sudo ip route replace 192.168.1.100/32 dev eth0 src 192.168.1.20
-  sudo ip route replace 192.168.1.101/32 dev eth0 src 192.168.1.20
-  sudo ip neigh flush to 192.168.1.100
-  sudo ip neigh flush to 192.168.1.101
-```
-
+停止时默认直接失能，不自动回零。需要回零时显式传
+`--home-on-shutdown`；回零本身也是运动，请先确保工作空间安全。

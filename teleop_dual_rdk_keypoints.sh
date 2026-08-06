@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # RDK side: read both Wuji gloves and send raw keypoints to the host retarget bridge.
 HOST_RETARGET_HOST="${HOST_RETARGET_HOST:-192.168.126.20}"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 LEFT_PORT="${LEFT_PORT:-8865}"
 RIGHT_PORT="${RIGHT_PORT:-8866}"
 LEFT_GLOVE_NAME="${LEFT_GLOVE_NAME:-glove_l}"
@@ -34,7 +35,7 @@ start_sender() {
   local name="$3"
   local sn="$4"
   local cmd=(
-    conda run -n wuji python "$SCRIPT_DIR/glove_qpos_client.py"
+    conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/glove_qpos_client.py"
     --host "$HOST_RETARGET_HOST"
     --port "$port"
     --hand "$side"

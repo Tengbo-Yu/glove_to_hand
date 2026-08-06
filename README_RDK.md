@@ -5,7 +5,7 @@
 ```text
 RDK 端：连接 Wuji 手套，发送 keypoints
 主机端：接收 keypoints，做 retargeting，发送 qpos
-机器人端：连接 Wuji Hand，接收 qpos 并控制灵巧手
+机器人端：通过 wuji-sdk 连接 Wuji Hand 2，接收设备顺序 qpos 并控制灵巧手
 ```
 
 ## 默认地址
@@ -17,24 +17,30 @@ RDK 端：连接 Wuji 手套，发送 keypoints
 
 如 IP 不同，运行脚本时用环境变量覆盖。
 
-## 1. 机器人端启动灵巧手服务
+所有 Python 入口默认使用 `wuji_new`，协议为 `glove-qpos-v2`。旧版
+Hand1/USB 客户端与 v1 qpos 会被拒绝。
+
+## 1. 机器人端启动 Hand 2 服务
+
+以下脚本会使能机械手，因此必须显式设置 `ENABLE_HAND2=1`。
 
 单手：
 
 ```bash
-bash teleop_robot_hand.sh
+HAND_SIDE=right ENABLE_HAND2=1 bash teleop_robot_hand.sh
 ```
 
 双手：
 
 ```bash
-bash teleop_dual_robot_hand.sh
+ENABLE_HAND2=1 bash teleop_dual_robot_hand.sh
 ```
 
 右手单独运行：
 
 ```bash
-HAND_SIDE=right bash teleop_robot_hand.sh
+HAND_SIDE=right ENABLE_HAND2=1 \
+RIGHT_HAND_SN=WH2KA01260730030 bash teleop_robot_hand.sh
 ```
 
 ## 2. 主机端启动 retarget bridge
@@ -51,7 +57,7 @@ ROBOT_HAND_HOST=<机器人IP> bash teleop_host_bridge.sh
 ROBOT_HAND_HOST=<机器人IP> bash teleop_dual_host_bridge.sh
 ```
 
-右手单独运行：
+右手单独运行（默认就是右手）：
 
 ```bash
 HAND_SIDE=right ROBOT_HAND_HOST=<机器人IP> bash teleop_host_bridge.sh
@@ -137,3 +143,8 @@ ip route get <主机IP或机器人IP>
 ```
 
 确认 teleop 数据走有线网口，SSH 仍走原来的 `10.1.10.x` 网络。
+
+机器人端还需要一块位于 `192.168.1.0/24` 的网卡连接 Hand 2。右手默认
+静态 IP 为 `192.168.1.111`，但连接参数应优先使用 SN 或 SDK 扫描返回的
+完整地址，不要假定端口固定。该网卡与 `192.168.126.0/24` 的三端传输网卡
+应使用不同物理接口或明确的独立路由。

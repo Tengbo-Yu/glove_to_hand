@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Host side: receive both hands' keypoints from RDK, retarget, and forward qpos to robot.
 ROBOT_HAND_HOST="${ROBOT_HAND_HOST:-127.0.0.1}"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 LEFT_RDK_PORT="${LEFT_RDK_PORT:-8865}"
 RIGHT_RDK_PORT="${RIGHT_RDK_PORT:-8866}"
 LEFT_ROBOT_PORT="${LEFT_ROBOT_PORT:-8765}"
@@ -28,7 +29,7 @@ start_bridge() {
   local listen_port="$2"
   local robot_port="$3"
   local cmd=(
-    python "$SCRIPT_DIR/host_retarget_bridge.py"
+    conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/host_retarget_bridge.py"
     --bind-host 0.0.0.0
     --listen-port "$listen_port"
     --robot-host "$ROBOT_HAND_HOST"

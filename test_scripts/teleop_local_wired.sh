@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 
 # Single-hand wired teleop client.
 # Teleop data goes over the dedicated Ethernet link only; SSH/Wi-Fi stays on 10.1.10.x.
@@ -14,7 +15,7 @@ LOCAL_WIRED_IP="${LOCAL_WIRED_IP:-192.168.126.10/24}"
 HAND_SERVER_HOST="${HAND_SERVER_HOST:-192.168.126.20}"
 
 # Select one hand. Override with: HAND_SIDE=left bash teleop_local_wired.sh
-HAND_SIDE="${HAND_SIDE:-left}"
+HAND_SIDE="${HAND_SIDE:-right}"
 
 LEFT_PORT="${LEFT_PORT:-8765}"
 RIGHT_PORT="${RIGHT_PORT:-8766}"
@@ -91,7 +92,7 @@ echo "Hand server: $HAND_SERVER_HOST:$HAND_SERVER_PORT"
 echo "Wired interface: $WIRED_IFACE"
 
 CMD=(
-  conda run -n wuji python "$SCRIPT_DIR/glove_qpos_client.py"
+    conda run -n "$WUJI_CONDA_ENV" python "$PROJECT_ROOT/glove_qpos_client.py"
   --host "$HAND_SERVER_HOST"
   --port "$HAND_SERVER_PORT"
   --hand "$HAND_SIDE"

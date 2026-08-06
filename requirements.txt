@@ -1,14 +1,21 @@
+# Versions matched to Wuji Hand 2 firmware v2.2.3 (2026-08-03 stack).
 numpy==2.2.6
 packaging==26.0
-wuji-sdk==2026.5.26
-wujihandpy==1.7.0
-numpy>=1.21.0
-avp_stream
-mujoco
+wuji-sdk==2026.8.3
+
+# pin 3.8.0 wheels link against urdfdom 4 / tinyxml2 10.  Keep these pins;
+# newer unbounded cmeel wheels are ABI-incompatible with this pin wheel.
 pin==3.8.0
+cmeel-urdfdom==4.0.1
+cmeel-tinyxml2==10.0.0
+
 nlopt
 pyyaml
 scipy>=1.11.0
+mujoco>=3.6
+avp_stream
 mediapipe
 opencv-python
-pin==3.8.0
+
+# Use the checked-out v2026.8.3 implementation and Hand 2 configs.
+-e ./wuji-retargeting

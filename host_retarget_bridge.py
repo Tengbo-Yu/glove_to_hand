@@ -2,10 +2,8 @@
 import argparse
 import signal
 import socket
-import sys
 import time
 from collections import defaultdict
-from pathlib import Path
 
 import numpy as np
 
@@ -16,17 +14,7 @@ from qpos_protocol import (
     make_hello_message,
     make_qpos_message,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-RETARGETING_ROOT = PROJECT_ROOT / "wuji-retargeting"
-RETARGETING_EXAMPLE = RETARGETING_ROOT / "example"
-
-for path in (RETARGETING_ROOT, RETARGETING_EXAMPLE):
-    path_str = str(path)
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
-
-from wuji_retargeting import Retargeter
+from retargeting_hand2 import Hand2RetargetPipeline
 
 
 class IntervalStats:
@@ -71,8 +59,8 @@ def parse_args():
     parser.add_argument("--listen-port", type=int, default=8765, help="TCP port for RDK keypoint client.")
     parser.add_argument("--robot-host", required=True, help="Robot machine IP running hand_qpos_server.py.")
     parser.add_argument("--robot-port", type=int, default=8765, help="Robot qpos server TCP port.")
-    parser.add_argument("--hand", default="left", choices=("left", "right"), help="Hand side for retargeting.")
-    parser.add_argument("--config", default=None, help="Retargeting YAML config path.")
+    parser.add_argument("--hand", default="right", choices=("left", "right"), help="Hand 2 side for retargeting.")
+    parser.add_argument("--config", default=None, help="Hand 2 retargeting YAML config path.")
     parser.add_argument("--keep-listening", action="store_true", help="Accept another RDK client after one disconnects.")
     parser.add_argument("--connect-timeout", type=float, default=10.0, help="Seconds to wait when connecting to robot.")
     parser.add_argument("--socket-timeout", type=float, default=1.0, help="Seconds to wait for keypoint frames before printing a warning.")
@@ -80,16 +68,6 @@ def parse_args():
     parser.add_argument("--retarget-lp-alpha", type=float, default=0.0, help="Override retargeter low-pass alpha. 0 keeps config value.")
     parser.add_argument("--debug-latency", action="store_true", help="Print timing summaries.")
     return parser.parse_args()
-
-
-def resolve_config(config, hand_side):
-    if config:
-        return Path(config).expanduser().resolve()
-    return (
-        RETARGETING_EXAMPLE
-        / "config"
-        / f"adaptive_analytical_wuji_glove_{hand_side}.yaml"
-    )
 
 
 def open_robot_socket(host, port, connect_timeout, hand_side):
@@ -132,7 +110,7 @@ def read_latest_frame(reader, expected_hand, metrics=None):
     return message, dropped
 
 
-def serve_connection(conn, peer, args, retargeter, stop_requested):
+def serve_connection(conn, peer, args, pipeline, stop_requested):
     print(f"RDK keypoint client connected: {peer}", flush=True)
     conn.settimeout(args.socket_timeout)
     reader = SocketLineReader(conn)
@@ -165,7 +143,7 @@ def serve_connection(conn, peer, args, retargeter, stop_requested):
             frame_start = time.perf_counter()
             if message["type"] == "keypoints_frame":
                 retarget_start = time.perf_counter()
-                qpos = retargeter.retarget(message["keypoints"]).reshape(5, 4)
+                qpos = pipeline.retarget(message["keypoints"]).reshape(5, 4)
                 retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
                 stats.add("retarget_ms", retarget_ms)
             else:
@@ -178,7 +156,15 @@ def serve_connection(conn, peer, args, retargeter, stop_requested):
                     "host_retarget_ms": round(retarget_ms, 3),
                     "host_age_ms": round((time.time() - message["timestamp"]) * 1000.0, 3),
                 })
-            payload = encode_message(make_qpos_message(message["seq"], qpos, message["timestamp"], debug=debug or None))
+            payload = encode_message(
+                make_qpos_message(
+                    message["seq"],
+                    qpos,
+                    message["timestamp"],
+                    args.hand,
+                    debug=debug or None,
+                )
+            )
 
             send_start = time.perf_counter()
             robot_sock.sendall(payload)
@@ -227,18 +213,15 @@ def serve_connection(conn, peer, args, retargeter, stop_requested):
 
 
 def run(args):
-    config_path = resolve_config(args.config, args.hand)
-    if not config_path.exists():
-        raise FileNotFoundError(f"Retargeting config not found: {config_path}")
+    pipeline = Hand2RetargetPipeline(args.config, args.hand)
 
     print(f"Host retarget bridge hand: {args.hand}")
-    print(f"Retarget config: {config_path}")
+    print(f"Retarget config: {pipeline.config_path}")
     print(f"Listen for RDK keypoints: {args.bind_host}:{args.listen_port}")
     print(f"Forward robot qpos: {args.robot_host}:{args.robot_port}")
 
-    retargeter = Retargeter.from_yaml(str(config_path), args.hand)
     if args.retarget_lp_alpha > 0:
-        retargeter.lp_filter.alpha = args.retarget_lp_alpha
+        pipeline.retargeter.lp_filter.alpha = args.retarget_lp_alpha
         print(f"Retarget low-pass alpha override: {args.retarget_lp_alpha}")
 
     stop_requested = False
@@ -266,7 +249,7 @@ def run(args):
             except socket.timeout:
                 continue
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            serve_connection(conn, peer, args, retargeter, should_stop)
+            serve_connection(conn, peer, args, pipeline, should_stop)
             if not args.keep_listening:
                 break
             if not stop_requested:

@@ -1,28 +1,15 @@
 import argparse
 import signal
 import socket
-import sys
 import threading
 import time
 from collections import defaultdict
-from pathlib import Path
 
 import numpy as np
-import wujihandpy
 
+from hand2_backend import WujiHand2Backend
 from qpos_protocol import SocketLineReader, decode_message
-
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-RETARGETING_ROOT = PROJECT_ROOT / "wuji-retargeting"
-RETARGETING_EXAMPLE = RETARGETING_ROOT / "example"
-
-for path in (RETARGETING_ROOT, RETARGETING_EXAMPLE):
-    path_str = str(path)
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
-
-from wuji_retargeting import Retargeter
+from retargeting_hand2 import Hand2RetargetPipeline
 
 
 class QposSmoother:
@@ -139,66 +126,39 @@ def set_optimizer_timing(retargeter, enabled):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Receive qpos or raw glove keypoints over TCP and drive a Wuji Hand."
+        description="Receive qpos/keypoints over TCP and drive a Wuji Hand 2."
     )
     parser.add_argument("--bind-host", default="0.0.0.0", help="Host/IP to listen on.")
     parser.add_argument("--port", type=int, default=8765, help="TCP port to listen on.")
-    parser.add_argument("--hand", default="left", choices=("left", "right"), help="Hand side for robot-side retargeting.")
-    parser.add_argument("--config", default=None, help="Retargeting YAML config path for raw keypoint frames.")
+    parser.add_argument("--hand", default="right", choices=("left", "right"), help="Hand 2 side.")
+    parser.add_argument("--config", default=None, help="Hand 2 retargeting YAML for raw keypoint frames.")
     parser.add_argument("--keep-listening", action="store_true", help="Keep listening for another glove client after a session ends.")
-    parser.add_argument("--enable-hand", action="store_true", help="Actually enable and move Wuji Hand.")
-    parser.add_argument("--hand-serial", default=None, help="USB serial number for Wuji Hand when multiple hands are connected.")
+    parser.add_argument("--enable-hand", action="store_true", help="Explicitly enable and move Wuji Hand 2.")
+    parser.add_argument("--hand-sn", default="", help="Wuji Hand 2 serial number.")
+    parser.add_argument("--hand-address", default="", help="Hand 2 address, e.g. 192.168.1.111:7447.")
+    parser.add_argument("--hand-device-name", default="", help="Optional local wuji_sdk alias.")
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds after glove connects. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Hand homing timing rate in Hz.")
     parser.add_argument("--control-rate", type=float, default=60.0, help="Fixed hand command output rate in Hz.")
-    parser.add_argument("--lowpass", type=float, default=5.0, help="Wuji Hand realtime low-pass cutoff in Hz.")
+    parser.add_argument("--kp", type=float, default=3.0, help="Hand 2 MIT position gain.")
+    parser.add_argument("--kd", type=float, default=0.1, help="Hand 2 MIT damping gain.")
+    parser.add_argument("--current-limit", type=float, default=1.5, help="Per-joint current limit in A.")
+    parser.add_argument("--enable-timeout", type=float, default=5.0)
     parser.add_argument("--smooth-tau", type=float, default=0.05, help="Output qpos smoothing time constant in seconds. Lower is faster; higher is smoother.")
     parser.add_argument("--max-joint-velocity", type=float, default=0.0, help="Optional output slew limit in rad/s. 0 disables slew limiting.")
     parser.add_argument("--disable-output-smoothing", action="store_true", help="Send each retargeted qpos directly without output smoothing/resampling.")
     parser.add_argument("--retarget-lp-alpha", type=float, default=0.0, help="Override retargeter low-pass alpha. 0 keeps config value.")
     parser.add_argument("--print-every", type=float, default=1.0, help="Seconds between status prints.")
     parser.add_argument("--socket-timeout", type=float, default=1.0, help="Seconds to wait for a glove frame before printing a timeout warning.")
+    parser.add_argument("--command-timeout", type=float, default=1.0, help="Disable Hand 2 if no valid frame arrives for this many seconds. 0 disables the watchdog.")
     parser.add_argument("--debug-latency", action="store_true", help="Print socket/frame/hand-write timing summaries for latency diagnosis.")
     parser.add_argument("--debug-slow-ms", type=float, default=0.0, help="Print slow-frame details above this server processing time in ms. Default derives from --rate.")
-    parser.add_argument("--home-on-shutdown", action=argparse.BooleanOptionalAction, default=True, help="Move Wuji Hand to zero position before shutdown.")
+    parser.add_argument("--home-on-shutdown", action=argparse.BooleanOptionalAction, default=False, help="Opt-in: move Hand 2 to zero before shutdown.")
     parser.add_argument("--home-duration", type=float, default=1.5, help="Seconds to spend moving to zero position before shutdown.")
     return parser.parse_args()
 
 
-def resolve_config(config, hand_side):
-    if config:
-        return Path(config).expanduser().resolve()
-    return (
-        RETARGETING_EXAMPLE
-        / "config"
-        / f"adaptive_analytical_wuji_glove_{hand_side}.yaml"
-    )
-
-
-def home_hand(controller, duration, rate):
-    start = controller.get_joint_actual_position().astype(np.float64)
-    zero = np.zeros((5, 4), dtype=np.float64)
-    interval = 1.0 / rate
-    steps = max(1, int(duration * rate))
-    for step in range(steps):
-        alpha = (step + 1) / steps
-        target = (1.0 - alpha) * start + alpha * zero
-        controller.set_joint_target_position(target)
-        time.sleep(interval)
-    controller.set_joint_target_position(zero)
-
-
-def create_hand_controller(hand_serial, lowpass):
-    hand = wujihandpy.Hand(serial_number=hand_serial) if hand_serial else wujihandpy.Hand()
-    hand.write_joint_enabled(True)
-    controller = hand.realtime_controller(
-        enable_upstream=False,
-        filter=wujihandpy.filter.LowPass(cutoff_freq=lowpass),
-    )
-    return hand, controller
-
-
-def read_latest_qpos(reader, metrics=None):
+def read_latest_qpos(reader, metrics=None, expected_hand=None):
     """Drain all buffered lines, returning the newest qpos/keypoints message.
 
     Returns (message_or_None, dropped). None means no full frame was available
@@ -225,7 +185,14 @@ def read_latest_qpos(reader, metrics=None):
         if decoded["type"] == "hello":
             if metrics is not None:
                 metrics["hello_messages"] += 1
-            print(f"Glove client hello: hand_side={decoded.get('hand_side', 'unknown')}")
+            side = decoded.get("hand_side")
+            print(f"Glove client hello: hand_side={side}")
+            if expected_hand is not None and side != expected_hand:
+                print(f"Ignoring hello for {side}; this server controls {expected_hand}")
+            return
+        side = decoded.get("hand_side")
+        if expected_hand is not None and side != expected_hand:
+            print(f"Ignoring {side} frame on {expected_hand} Hand 2 server")
             return
         if metrics is not None:
             metrics["decoded_frames"] += 1
@@ -251,8 +218,7 @@ def serve_connection(conn, peer, args, stop_requested):
     conn.settimeout(args.socket_timeout)
     reader = SocketLineReader(conn)
 
-    hand = None
-    controller = None
+    backend = None
     receiver_stop = threading.Event()
     receiver_done = threading.Event()
     receiver_state = {
@@ -269,9 +235,16 @@ def serve_connection(conn, peer, args, stop_requested):
         while not receiver_stop.is_set() and not stop_requested():
             metrics = {} if args.debug_latency else None
             try:
-                message, dropped = read_latest_qpos(reader, metrics)
+                message, dropped = read_latest_qpos(
+                    reader, metrics, expected_hand=args.hand
+                )
             except EOFError:
                 print("Glove client disconnected.")
+                with receiver_lock:
+                    receiver_state["eof"] = True
+                break
+            except Exception as exc:
+                print(f"Glove receiver failed: {exc}")
                 with receiver_lock:
                     receiver_state["eof"] = True
                 break
@@ -293,24 +266,32 @@ def serve_connection(conn, peer, args, stop_requested):
     receiver = threading.Thread(target=receiver_loop, name="qpos-receiver", daemon=True)
 
     try:
-        if args.enable_hand:
-            hand, controller = create_hand_controller(args.hand_serial, args.lowpass)
-            time.sleep(0.5)
-            print("Hand enabled and realtime controller started.")
-        else:
-            print("Dry run: printing received qpos only. Add --enable-hand to move the hand.")
-
-        config_path = resolve_config(args.config, args.hand)
-        if not config_path.exists():
-            raise FileNotFoundError(f"Retargeting config not found: {config_path}")
-        retargeter = Retargeter.from_yaml(str(config_path), args.hand)
+        # Validate the Hand 2 model and URDF->device order before any enable call.
+        pipeline = Hand2RetargetPipeline(args.config, args.hand)
+        retargeter = pipeline.retargeter
         if args.retarget_lp_alpha > 0:
             retargeter.lp_filter.alpha = args.retarget_lp_alpha
             print(f"Retarget low-pass alpha override: {args.retarget_lp_alpha}")
         set_optimizer_timing(retargeter, args.debug_latency)
         if args.debug_latency:
             reset_optimizer_timing(retargeter)
-        print(f"Robot-side retarget config: {config_path}")
+        print(f"Robot-side Hand 2 retarget config: {pipeline.config_path}")
+
+        if args.enable_hand:
+            backend = WujiHand2Backend(
+                args.hand,
+                sn=args.hand_sn,
+                address=args.hand_address,
+                device_name=args.hand_device_name or f"wuji_hand_2_{args.hand}",
+                kp=args.kp,
+                kd=args.kd,
+                current_limit=args.current_limit,
+                enable_timeout=args.enable_timeout,
+            )
+            backend.enable()
+            print("Hand 2 enabled and command publisher started.")
+        else:
+            print("Dry run: Hand 2 remains disabled; received qpos is printed only.")
         print(
             f"Output smoothing: {'off' if args.disable_output_smoothing else 'on'} "
             f"control_rate={args.control_rate:g}Hz smooth_tau={args.smooth_tau:g}s "
@@ -319,13 +300,14 @@ def serve_connection(conn, peer, args, stop_requested):
 
         receiver.start()
 
-        control_interval = 1.0 / args.control_rate
+        control_interval = 1.0 / max(args.control_rate, 1.0)
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
         next_tick = time.monotonic()
         last_tick = next_tick
         last_print = 0.0
         last_version = -1
         last_seq = None
+        last_valid_frame_time = time.monotonic()
         received = 0
         last_qpos = None
         smoother = QposSmoother(
@@ -357,7 +339,7 @@ def serve_connection(conn, peer, args, stop_requested):
                 dropped = receiver_state["dropped"]
                 read_metrics = receiver_state["metrics"]
                 receiver_state["dropped"] = 0
-            if eof and message is None:
+            if eof:
                 break
 
             new_target = False
@@ -368,6 +350,7 @@ def serve_connection(conn, peer, args, stop_requested):
             if message is not None and version != last_version:
                 frame_start = time.perf_counter()
                 last_version = version
+                last_valid_frame_time = time.monotonic()
                 received += 1
                 seq = message["seq"]
                 seq_gap = 0 if last_seq is None else max(0, seq - last_seq - 1)
@@ -386,7 +369,7 @@ def serve_connection(conn, peer, args, stop_requested):
                     keypoints = message["keypoints"]
                     if not np.allclose(keypoints, 0):
                         retarget_start = time.perf_counter()
-                        last_qpos = retargeter.retarget(keypoints).reshape(5, 4)
+                        last_qpos = pipeline.retarget(keypoints).reshape(5, 4)
                         retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
                         new_target = True
                 else:
@@ -410,9 +393,18 @@ def serve_connection(conn, peer, args, stop_requested):
 
             command_qpos = smoother.step(dt)
             hand_write_ms = 0.0
-            if command_qpos is not None and controller is not None:
+            if (
+                backend is not None
+                and args.command_timeout > 0
+                and time.monotonic() - last_valid_frame_time > args.command_timeout
+            ):
+                raise TimeoutError(
+                    f"No valid {args.hand} command frame for "
+                    f"{args.command_timeout:g}s; disabling Hand 2"
+                )
+            if command_qpos is not None and backend is not None:
                 hand_start = time.perf_counter()
-                controller.set_joint_target_position(command_qpos)
+                backend.send(command_qpos.reshape(-1))
                 hand_write_ms = (time.perf_counter() - hand_start) * 1000.0
             stats.add("hand_write_ms", hand_write_ms)
             stats.inc("control_ticks")
@@ -456,20 +448,20 @@ def serve_connection(conn, peer, args, stop_requested):
         receiver_stop.set()
         if receiver.is_alive():
             receiver.join(timeout=1.0)
-        if hand is not None:
-            if controller is not None and args.home_on_shutdown:
+        if backend is not None:
+            if backend.is_enabled and args.home_on_shutdown:
                 try:
-                    print(f"Homing hand to zero for {args.home_duration:.1f}s before shutdown.")
-                    home_hand(controller, args.home_duration, args.rate)
+                    print(f"Homing Hand 2 to zero for {args.home_duration:.1f}s before shutdown.")
+                    backend.home(args.home_duration, args.rate)
                 except Exception as exc:
                     print(f"Shutdown homing skipped: {exc}")
-            hand.write_joint_enabled(False)
+            backend.close()
         try:
             conn.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
         conn.close()
-        print("Session ended. Hand disabled and socket closed.")
+        print("Session ended. Hand 2 disabled and socket closed.")
 
 
 def run(args):
@@ -488,7 +480,7 @@ def run(args):
     server.listen(1)
     server.settimeout(0.5)
     print(f"Hand server listening on {args.bind_host}:{args.port}")
-    print(f"Mode: {'MOVE HAND' if args.enable_hand else 'DRY RUN'}")
+    print(f"Mode: {'MOVE HAND 2' if args.enable_hand else 'DRY RUN'}")
 
     def get_stop_requested():
         return stop_requested

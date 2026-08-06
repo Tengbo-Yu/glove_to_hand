@@ -1,44 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Fill these if multiple hands are connected. Leave empty to let wujihandpy auto-select.
-LEFT_HAND_SERIAL=""
-RIGHT_HAND_SERIAL=""
-
-# Fill these if multiple Wuji gloves are online. Leave empty to auto-connect a single glove per name.
-LEFT_GLOVE_SN=""
-RIGHT_GLOVE_SN=""
-
-# Change these to match the device names assigned by wuji-sdk auto_connect.
-LEFT_GLOVE_NAME="glove_l"
-RIGHT_GLOVE_NAME="glove_r"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
+ENABLE_HAND2="${ENABLE_HAND2:-0}"
 
 CMD=(
-  conda run -n wuji python "$SCRIPT_DIR/glove_to_hand_dual.py"
-  --enable-hand
-  --left-glove-name "$LEFT_GLOVE_NAME"
-  --right-glove-name "$RIGHT_GLOVE_NAME"
-  --rate 60
-  --lowpass 10
-  --home-duration 2
+  conda run -n "$WUJI_CONDA_ENV" python "$PROJECT_ROOT/glove_to_hand_dual.py"
+  --left-glove-name "${LEFT_GLOVE_NAME:-glove_l}"
+  --right-glove-name "${RIGHT_GLOVE_NAME:-glove_r}"
+  --left-glove-sn "${LEFT_GLOVE_SN:-}"
+  --right-glove-sn "${RIGHT_GLOVE_SN:-}"
+  --left-hand-sn "${LEFT_HAND_SN:-}"
+  --right-hand-sn "${RIGHT_HAND_SN:-}"
+  --rate "${RATE:-60}"
+  --current-limit "${CURRENT_LIMIT:-1.0}"
+  --no-home-on-shutdown
 )
-
-if [[ -n "$LEFT_HAND_SERIAL" ]]; then
-  CMD+=(--left-hand-serial "$LEFT_HAND_SERIAL")
+if [[ "$ENABLE_HAND2" == "1" ]]; then
+  CMD+=(--enable-hand)
+else
+  echo "Dual dry run only. Set ENABLE_HAND2=1 to enable both Hand 2 devices."
 fi
-
-if [[ -n "$RIGHT_HAND_SERIAL" ]]; then
-  CMD+=(--right-hand-serial "$RIGHT_HAND_SERIAL")
-fi
-
-if [[ -n "$LEFT_GLOVE_SN" ]]; then
-  CMD+=(--left-glove-sn "$LEFT_GLOVE_SN")
-fi
-
-if [[ -n "$RIGHT_GLOVE_SN" ]]; then
-  CMD+=(--right-glove-sn "$RIGHT_GLOVE_SN")
-fi
-
 "${CMD[@]}"

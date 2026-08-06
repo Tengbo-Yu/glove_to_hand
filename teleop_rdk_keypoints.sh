@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # RDK side: read one Wuji glove and send raw keypoints to the host retarget bridge.
 HOST_RETARGET_HOST="${HOST_RETARGET_HOST:-192.168.126.20}"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 
 HAND_SIDE="${HAND_SIDE:-left}"
 LEFT_PORT="${LEFT_PORT:-8865}"
@@ -38,7 +39,7 @@ case "$HAND_SIDE" in
 esac
 
 CMD=(
-  conda run -n wuji python "$SCRIPT_DIR/glove_qpos_client.py"
+  conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/glove_qpos_client.py"
   --host "$HOST_RETARGET_HOST"
   --port "$HOST_RETARGET_PORT"
   --hand "$HAND_SIDE"

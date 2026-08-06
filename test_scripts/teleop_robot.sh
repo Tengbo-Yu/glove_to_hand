@@ -1,39 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Fill this if multiple hands are connected. Leave empty to let wujihandpy auto-select.
-# HAND_SERIAL="337338793233" #right hand
-HAND_SERIAL="3378387C3233" #left hand
-
-# Port the glove client will connect to. Must match teleop_client.sh.
-PORT="8765"
-CONTROL_RATE="${CONTROL_RATE:-60}"
-LOWPASS="${LOWPASS:-15}"
-SMOOTH_TAU="${SMOOTH_TAU:-0.05}"
-RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0.6}"
-
-CMD=(
-  python "$SCRIPT_DIR/hand_qpos_server.py"
-  --bind-host 0.0.0.0
-  --port "$PORT"
-  --hand left
-  --enable-hand
-  --rate 60
-  --control-rate "$CONTROL_RATE"
-  --lowpass "$LOWPASS"
-  --smooth-tau "$SMOOTH_TAU"
-  --retarget-lp-alpha "$RETARGET_LP_ALPHA"
-  --home-duration 2
-)
-
-if [[ -n "$HAND_SERIAL" ]]; then
-  CMD+=(--hand-serial "$HAND_SERIAL")
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${ENABLE_HAND2:-0}" != "1" ]]; then
+  echo "Refusing to energize Hand 2. Re-run with ENABLE_HAND2=1." >&2
+  exit 2
 fi
-
-if [[ "${DEBUG_LATENCY:-0}" == "1" ]]; then
-  CMD+=(--debug-latency --print-every "${PRINT_EVERY:-0.5}")
-fi
-
-"${CMD[@]}"
+HAND_SIDE="${HAND_SIDE:-right}" \
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}" \
+exec "$PROJECT_ROOT/teleop_robot_hand.sh"

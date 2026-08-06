@@ -11,7 +11,7 @@ import socket
 import numpy as np
 
 
-PROTOCOL_NAME = "glove-qpos-v1"
+PROTOCOL_NAME = "glove-qpos-v2"
 JOINT_MATRIX_SHAPE = (5, 4)
 KEYPOINTS_SHAPE = (21, 3)
 
@@ -20,20 +20,30 @@ def make_hello_message(hand_side, sent_at):
     return {
         "type": "hello",
         "protocol": PROTOCOL_NAME,
-        "hand_side": hand_side,
+        "hand_side": _validate_hand_side(hand_side),
         "sent_at": float(sent_at),
     }
 
 
-def make_qpos_message(seq, qpos, timestamp, debug=None):
+def _validate_hand_side(hand_side):
+    if hand_side not in {"left", "right"}:
+        raise ValueError(f"hand_side must be left/right, got {hand_side!r}")
+    return hand_side
+
+
+def make_qpos_message(seq, qpos, timestamp, hand_side, debug=None):
     qpos = np.asarray(qpos, dtype=np.float64)
     if qpos.shape != JOINT_MATRIX_SHAPE:
         raise ValueError(f"qpos must have shape {JOINT_MATRIX_SHAPE}, got {qpos.shape}")
+    if not np.isfinite(qpos).all():
+        raise ValueError("qpos must contain only finite values")
     message = {
         "type": "frame",
         "protocol": PROTOCOL_NAME,
         "seq": int(seq),
         "timestamp": float(timestamp),
+        "hand_side": _validate_hand_side(hand_side),
+        "joint_order": "device",
         "qpos": qpos.tolist(),
     }
     if debug is not None:
@@ -45,12 +55,14 @@ def make_keypoints_message(seq, keypoints, timestamp, hand_side, debug=None):
     keypoints = np.asarray(keypoints, dtype=np.float64)
     if keypoints.shape != KEYPOINTS_SHAPE:
         raise ValueError(f"keypoints must have shape {KEYPOINTS_SHAPE}, got {keypoints.shape}")
+    if not np.isfinite(keypoints).all():
+        raise ValueError("keypoints must contain only finite values")
     message = {
         "type": "keypoints_frame",
         "protocol": PROTOCOL_NAME,
         "seq": int(seq),
         "timestamp": float(timestamp),
-        "hand_side": hand_side,
+        "hand_side": _validate_hand_side(hand_side),
         "keypoints": keypoints.tolist(),
     }
     if debug is not None:
@@ -75,16 +87,28 @@ def decode_message(line):
 
     message_type = message.get("type")
     if message_type == "hello":
+        _validate_hand_side(message.get("hand_side"))
         return message
     if message_type == "frame":
+        _validate_hand_side(message.get("hand_side"))
+        if message.get("joint_order") != "device":
+            raise ValueError(
+                "qpos frame must declare joint_order='device'; "
+                "URDF-order commands are unsafe for Wuji Hand 2"
+            )
         qpos = np.asarray(message.get("qpos"), dtype=np.float64)
         if qpos.shape != JOINT_MATRIX_SHAPE:
             raise ValueError(f"qpos must have shape {JOINT_MATRIX_SHAPE}, got {qpos.shape}")
+        if not np.isfinite(qpos).all():
+            raise ValueError("qpos must contain only finite values")
         message["qpos"] = qpos
     elif message_type == "keypoints_frame":
+        _validate_hand_side(message.get("hand_side"))
         keypoints = np.asarray(message.get("keypoints"), dtype=np.float64)
         if keypoints.shape != KEYPOINTS_SHAPE:
             raise ValueError(f"keypoints must have shape {KEYPOINTS_SHAPE}, got {keypoints.shape}")
+        if not np.isfinite(keypoints).all():
+            raise ValueError("keypoints must contain only finite values")
         message["keypoints"] = keypoints
     else:
         raise ValueError(f"unsupported message type {message_type!r}")

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 
 # IP address of the machine running teleop_server.sh. Use 127.0.0.1 when both run locally.
 HAND_SERVER_HOST="10.1.10.166"
@@ -24,7 +25,7 @@ GLOVE_STREAM="${GLOVE_STREAM:-offline_hand_skeleton}"
 WUJI_LOG_LEVEL="${WUJI_LOG_LEVEL:-error}"
 
 CMD=(
-  python "$SCRIPT_DIR/glove_qpos_client.py"
+  conda run -n "$WUJI_CONDA_ENV" python "$PROJECT_ROOT/glove_qpos_client.py"
   --host "$HAND_SERVER_HOST"
   --port "$HAND_SERVER_PORT"
   --hand "$HAND_SIDE"

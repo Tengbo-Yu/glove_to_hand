@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Host side: receive one hand's keypoints from RDK, retarget, and forward qpos to robot.
-HAND_SIDE="${HAND_SIDE:-left}"
+HAND_SIDE="${HAND_SIDE:-right}"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 ROBOT_HAND_HOST="${ROBOT_HAND_HOST:-127.0.0.1}"
 LEFT_RDK_PORT="${LEFT_RDK_PORT:-8865}"
 RIGHT_RDK_PORT="${RIGHT_RDK_PORT:-8866}"
@@ -31,7 +32,7 @@ case "$HAND_SIDE" in
 esac
 
 CMD=(
-  python "$SCRIPT_DIR/host_retarget_bridge.py"
+  conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/host_retarget_bridge.py"
   --bind-host 0.0.0.0
   --listen-port "$LISTEN_PORT"
   --robot-host "$ROBOT_HAND_HOST"

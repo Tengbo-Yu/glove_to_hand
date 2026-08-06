@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 
 # Dual-hand wired teleop client.
 # Teleop data goes over the dedicated Ethernet link only; SSH/Wi-Fi stays on 10.1.10.x.
@@ -86,7 +87,7 @@ start_client() {
   echo "Wired interface: $WIRED_IFACE"
 
   local cmd=(
-    conda run -n wuji python "$SCRIPT_DIR/glove_qpos_client.py"
+    conda run -n "$WUJI_CONDA_ENV" python "$PROJECT_ROOT/glove_qpos_client.py"
     --host "$host"
     --port "$port"
     --hand "$side"

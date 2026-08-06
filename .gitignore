@@ -1,0 +1,8 @@
+*.py[cod]
+__pycache__/
+
+# wuji-retargeting is vendored in this repository, while these paths are its
+# own pinned Git submodule worktrees.  Initialize them with the README command;
+# do not vendor their generated checkout contents into the outer repository.
+wuji-retargeting/example/utils/mujoco-sim/
+wuji-retargeting/wuji_retargeting/wuji-description/

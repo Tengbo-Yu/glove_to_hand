@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 
 # IP address(es) of the machine(s) running the hand servers.
 # When the hands are on the same machine, both hosts are the same IP.
@@ -42,7 +43,7 @@ start_client() {
   local name="$4"
   local sn="$5"
   local cmd=(
-    conda run -n wuji python "$SCRIPT_DIR/glove_qpos_client.py"
+    conda run -n "$WUJI_CONDA_ENV" python "$PROJECT_ROOT/glove_qpos_client.py"
     --host "$host"
     --port "$port"
     --hand "$side"
