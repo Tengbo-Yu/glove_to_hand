@@ -1,86 +1,74 @@
 # RDK 三端 Teleop 使用说明
 
-当前架构：
+当前单右手架构：
 
 ```text
-RDK 端：连接 Wuji 手套，发送 keypoints
-主机端：接收 keypoints，做 retargeting，发送 qpos
-机器人端：通过 wuji-sdk 连接 Wuji Hand 2，接收设备顺序 qpos 并控制灵巧手
+RDK 小主机 + 右手套
+    │ keypoints, TCP 10.1.10.166:8866
+    ▼
+本机 host1：Hand 2 retargeting
+    │ device-order qpos, TCP 127.0.0.1:8767
+    ▼
+本机 robot：wuji-sdk → 右侧 Wuji Hand 2 WH2KA01260730030
 ```
 
 ## 默认地址
 
-- RDK → 主机：`192.168.126.20`
-- 主机 → 机器人：默认本地测试 `127.0.0.1`；真实机器人时用 `ROBOT_HAND_HOST=<机器人IP>` 覆盖
+- RDK → host1：当前默认 `10.1.10.166`
+- host1 → robot：同一台主机，固定使用 `127.0.0.1`
 - 左手端口：RDK→主机 `8865`，主机→灵巧手 `8765`
 - 右手端口：RDK→主机 `8866`，主机→灵巧手 `8767`
 
-如 IP 不同，运行脚本时用环境变量覆盖。
+如本机地址变化，在 RDK 上用 `HOST_RETARGET_HOST=<本机可达IP>` 覆盖。只有配置了
+专用直连网后才使用旧的 `192.168.126.20` 地址。
 
 所有 Python 入口默认使用 `wuji_new`，协议为 `glove-qpos-v2`。旧版
 Hand1/USB 客户端与 v1 qpos 会被拒绝。
 
-## 1. 机器人端启动 Hand 2 服务
+## 单右手启动顺序
+
+### 1. 本机终端 1：启动 robot
 
 以下脚本会使能机械手，因此必须显式设置 `ENABLE_HAND2=1`。
-
-单手：
-
-```bash
-HAND_SIDE=right ENABLE_HAND2=1 bash teleop_robot_hand.sh
-```
-
-双手：
-
-```bash
-ENABLE_HAND2=1 bash teleop_dual_robot_hand.sh
-```
-
-右手单独运行：
 
 ```bash
 HAND_SIDE=right ENABLE_HAND2=1 \
 RIGHT_HAND_SN=WH2KA01260730030 bash teleop_robot_hand.sh
 ```
 
-## 2. 主机端启动 retarget bridge
+服务只绑定 `127.0.0.1:8767`。启动时仅监听；收到 host1 转发的首个有效右手
+qpos 后才连接并使能 Hand 2。首帧从实测关节角平滑接入，默认最大速度
+`2 rad/s`；连续 1 秒没有有效命令会自动失能。
 
-单手：
+### 2. 本机终端 2：启动 host1
 
 ```bash
-ROBOT_HAND_HOST=<机器人IP> bash teleop_host_bridge.sh
+HAND_SIDE=right ROBOT_HAND_HOST=127.0.0.1 bash teleop_host_bridge.sh
 ```
 
-双手：
+host1 监听所有本机接口的 `8866`，允许 RDK 断开后重新连接。
+
+### 3. RDK 小主机：启动右手套发送
 
 ```bash
+HAND_SIDE=right HOST_RETARGET_HOST=10.1.10.166 \
+RIGHT_GLOVE_SN=WG1KA03260512012 bash teleop_rdk_keypoints.sh
+```
+
+三个脚本现在都默认右手，因此当前地址和序列号不变时也可分别直接运行。
+所有进程使用实时、无缓冲输出，便于观察连接和看门狗状态。
+
+停止时先在 RDK 端按 `Ctrl-C`；host1 会关闭本地 qpos 连接，robot 随即失能
+Hand 2。然后再停止 host1 和 robot。
+
+## 双手或分离 robot 主机
+
+双手仍使用：
+
+```bash
+ENABLE_HAND2=1 bash teleop_dual_robot_hand.sh
 ROBOT_HAND_HOST=<机器人IP> bash teleop_dual_host_bridge.sh
-```
-
-右手单独运行（默认就是右手）：
-
-```bash
-HAND_SIDE=right ROBOT_HAND_HOST=<机器人IP> bash teleop_host_bridge.sh
-```
-
-## 3. RDK 端启动手套 keypoints 发送
-
-单手：
-
-```bash
-HOST_RETARGET_HOST=<主机IP> bash teleop_rdk_keypoints.sh
-```
-
-双手：
-
-```bash
 HOST_RETARGET_HOST=<主机IP> bash teleop_dual_rdk_keypoints.sh
-```
-
-右手单独运行：
-
-```bash
-HAND_SIDE=right HOST_RETARGET_HOST=<主机IP> bash teleop_rdk_keypoints.sh
 ```
 
 ## 有线网口配置

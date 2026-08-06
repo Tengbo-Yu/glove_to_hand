@@ -93,13 +93,13 @@ HAND_SIDE=right ENABLE_HAND2=1 bash teleop_robot_hand.sh
 主机端：
 
 ```bash
-HAND_SIDE=right ROBOT_HAND_HOST=<ROBOT_IP> bash teleop_host_bridge.sh
+HAND_SIDE=right ROBOT_HAND_HOST=127.0.0.1 bash teleop_host_bridge.sh
 ```
 
 RDK 端：
 
 ```bash
-HAND_SIDE=right HOST_RETARGET_HOST=<HOST_IP> bash teleop_rdk_keypoints.sh
+HAND_SIDE=right HOST_RETARGET_HOST=10.1.10.166 bash teleop_rdk_keypoints.sh
 ```
 
 所有脚本默认使用 `wuji_new`；可通过 `WUJI_CONDA_ENV=<name>` 覆盖。

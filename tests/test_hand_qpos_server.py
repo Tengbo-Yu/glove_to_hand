@@ -1,10 +1,12 @@
 import socket
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
-from hand_qpos_server import read_latest_qpos
+from hand_qpos_server import QposSmoother, read_latest_qpos, serve_connection
 from qpos_protocol import (
     SocketLineReader,
     decode_message,
@@ -13,6 +15,50 @@ from qpos_protocol import (
     make_keypoints_message,
     make_qpos_message,
 )
+
+
+class QposSmootherTest(unittest.TestCase):
+    def test_first_target_is_rate_limited_from_measured_position(self):
+        smoother = QposSmoother(tau=0.0, max_velocity=2.0)
+        measured = np.zeros((5, 4), dtype=np.float64)
+        smoother.initialize(measured)
+        smoother.set_target(np.ones((5, 4), dtype=np.float64))
+
+        output = smoother.step(0.1)
+
+        np.testing.assert_allclose(output, 0.2)
+
+    def test_initialize_rejects_invalid_joint_shape(self):
+        smoother = QposSmoother()
+        with self.assertRaisesRegex(ValueError, "shape"):
+            smoother.initialize(np.zeros(20, dtype=np.float64))
+
+
+class EnableGateTest(unittest.TestCase):
+    def test_hello_without_command_never_connects_or_enables_hand(self):
+        server_sock, client_sock = socket.socketpair()
+        client_sock.sendall(encode_message(make_hello_message("right", time.time())))
+        client_sock.close()
+        args = SimpleNamespace(
+            socket_timeout=0.02,
+            config=None,
+            hand="right",
+            retarget_lp_alpha=0.0,
+            debug_latency=False,
+            enable_hand=True,
+        )
+        fake_pipeline = SimpleNamespace(
+            config_path="fake-hand2.yaml",
+            retargeter=SimpleNamespace(),
+        )
+
+        with (
+            patch("hand_qpos_server.Hand2RetargetPipeline", return_value=fake_pipeline),
+            patch("hand_qpos_server.WujiHand2Backend") as backend_class,
+        ):
+            serve_connection(server_sock, ("local", 0), args, lambda: False)
+
+        backend_class.assert_not_called()
 
 
 class ReadLatestQposTest(unittest.TestCase):

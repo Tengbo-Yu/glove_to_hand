@@ -20,6 +20,13 @@ class QposSmoother:
         self.current = None
         self.target = None
 
+    def initialize(self, qpos):
+        """Start output from measured hardware state before accepting a target."""
+        qpos = np.asarray(qpos, dtype=np.float64)
+        if qpos.shape != (5, 4) or not np.isfinite(qpos).all():
+            raise ValueError(f"Initial qpos must be finite with shape (5, 4), got {qpos.shape}")
+        self.current = qpos.copy()
+
     def set_target(self, qpos):
         qpos = np.asarray(qpos, dtype=np.float64)
         self.target = qpos
@@ -277,7 +284,40 @@ def serve_connection(conn, peer, args, stop_requested):
             reset_optimizer_timing(retargeter)
         print(f"Robot-side Hand 2 retarget config: {pipeline.config_path}")
 
+        # Start receiving before touching hardware.  A TCP hello alone is not
+        # sufficient authority to energize the hand: wait for a validated frame.
+        receiver.start()
+
         if args.enable_hand:
+            print(
+                f"Waiting for the first valid {args.hand} command frame; "
+                "Hand 2 remains disabled."
+            )
+            last_wait_print = time.monotonic()
+            while not stop_requested():
+                with receiver_lock:
+                    first_message = receiver_state["message"]
+                    receiver_eof = receiver_state["eof"]
+                if first_message is not None:
+                    print(
+                        f"First valid {args.hand} frame received "
+                        f"(seq={first_message['seq']}); connecting Hand 2."
+                    )
+                    break
+                if receiver_eof:
+                    print(
+                        "Command client disconnected before sending a valid frame; "
+                        "Hand 2 was not enabled."
+                    )
+                    return
+                now = time.monotonic()
+                if now - last_wait_print >= 5.0:
+                    print("Still waiting for a valid command frame; Hand 2 is disabled.")
+                    last_wait_print = now
+                time.sleep(0.02)
+            else:
+                return
+
             backend = WujiHand2Backend(
                 args.hand,
                 sn=args.hand_sn,
@@ -298,8 +338,6 @@ def serve_connection(conn, peer, args, stop_requested):
             f"max_joint_velocity={args.max_joint_velocity:g}"
         )
 
-        receiver.start()
-
         control_interval = 1.0 / max(args.control_rate, 1.0)
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
         next_tick = time.monotonic()
@@ -315,6 +353,13 @@ def serve_connection(conn, peer, args, stop_requested):
             max_velocity=args.max_joint_velocity,
             enabled=not args.disable_output_smoothing,
         )
+        if backend is not None:
+            measured_qpos = backend.current_positions().reshape(5, 4)
+            smoother.initialize(measured_qpos)
+            print(
+                "Output initialized from measured Hand 2 joint positions; "
+                "the first teleop frame will be rate-limited."
+            )
         stats = IntervalStats()
         report_start = time.monotonic()
         interval_ms = control_interval * 1000.0

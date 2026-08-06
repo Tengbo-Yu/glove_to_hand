@@ -11,7 +11,6 @@ LEFT_RDK_PORT="${LEFT_RDK_PORT:-8865}"
 RIGHT_RDK_PORT="${RIGHT_RDK_PORT:-8866}"
 LEFT_ROBOT_PORT="${LEFT_ROBOT_PORT:-8765}"
 RIGHT_ROBOT_PORT="${RIGHT_ROBOT_PORT:-8767}"
-CONTROL_RATE="${CONTROL_RATE:-60}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
 RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0.6}"
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
@@ -32,12 +31,13 @@ case "$HAND_SIDE" in
 esac
 
 CMD=(
-  conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/host_retarget_bridge.py"
+  conda run --no-capture-output -n "$WUJI_CONDA_ENV" python -u "$SCRIPT_DIR/host_retarget_bridge.py"
   --bind-host 0.0.0.0
   --listen-port "$LISTEN_PORT"
   --robot-host "$ROBOT_HAND_HOST"
   --robot-port "$ROBOT_HAND_PORT"
   --hand "$HAND_SIDE"
+  --keep-listening
   --print-every "$PRINT_EVERY"
   --retarget-lp-alpha "$RETARGET_LP_ALPHA"
 )
