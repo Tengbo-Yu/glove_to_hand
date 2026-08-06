@@ -59,7 +59,7 @@ def parse_args():
     parser.add_argument("--hold", type=float, default=3.0, help="Seconds to hold the target.")
     parser.add_argument("--ramp", type=float, default=0.75, help="Seconds per position ramp.")
     parser.add_argument("--rate", type=float, default=50.0, help="Command publishing rate in Hz.")
-    parser.add_argument("--kp", type=float, default=1.0)
+    parser.add_argument("--kp", type=float, default=3.5)
     parser.add_argument("--kd", type=float, default=0.05)
     parser.add_argument("--current-limit", type=float, default=0.5)
     return parser.parse_args()

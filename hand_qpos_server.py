@@ -159,7 +159,7 @@ def parse_args():
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds after glove connects. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Hand homing timing rate in Hz.")
     parser.add_argument("--control-rate", type=float, default=60.0, help="Fixed hand command output rate in Hz.")
-    parser.add_argument("--kp", type=float, default=3.0, help="Hand 2 MIT position gain.")
+    parser.add_argument("--kp", type=float, default=3.5, help="Hand 2 MIT position gain.")
     parser.add_argument("--kd", type=float, default=0.1, help="Hand 2 MIT damping gain.")
     parser.add_argument("--current-limit", type=float, default=1.5, help="Per-joint current limit in A.")
     parser.add_argument("--enable-timeout", type=float, default=5.0)

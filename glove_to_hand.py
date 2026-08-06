@@ -40,7 +40,7 @@ def parse_args():
     )
     parser.add_argument("--duration", type=float, default=0.0)
     parser.add_argument("--rate", type=float, default=60.0)
-    parser.add_argument("--kp", type=float, default=3.0)
+    parser.add_argument("--kp", type=float, default=3.5)
     parser.add_argument("--kd", type=float, default=0.1)
     parser.add_argument("--current-limit", type=float, default=1.5)
     parser.add_argument("--enable-timeout", type=float, default=5.0)

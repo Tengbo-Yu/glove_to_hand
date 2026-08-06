@@ -45,7 +45,7 @@ class WujiHand2Backend:
         sn: str = "",
         address: str = "",
         device_name: Optional[str] = None,
-        kp: float = 3.0,
+        kp: float = 3.5,
         kd: float = 0.1,
         current_limit: float = 1.5,
         enable_timeout: float = 5.0,

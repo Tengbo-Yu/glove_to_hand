@@ -414,7 +414,7 @@ def run_teleop(
     hand_model: str = "wuji_hand",
     hand_serial: str = "",
     wuji_hand_2_ip: str = "",
-    kp: float = 3.0,
+    kp: float = 3.5,
     kd: float = 0.1,
     current_limit: float = 1.5,
 ):
@@ -723,7 +723,7 @@ Examples:
                         help='Wuji Hand hand serial number (for wujihandpy.Hand selection)')
     parser.add_argument('--wuji-hand-2-ip', type=str, default='',
                         help='Wuji Hand 2 SDK address, e.g. 192.168.1.111:50001 (run a scan to find it)')
-    parser.add_argument('--kp', type=float, default=3.0, help='Wuji Hand 2 MIT kp (default: 3.0)')
+    parser.add_argument('--kp', type=float, default=3.5, help='Wuji Hand 2 MIT kp (default: 3.5)')
     parser.add_argument('--kd', type=float, default=0.1, help='Wuji Hand 2 MIT kd (default: 0.1)')
     parser.add_argument('--current-limit', type=float, default=1.5,
                         help='Wuji Hand 2 per-joint current limit in amps (SDK effort_limit, default: 1.5)')

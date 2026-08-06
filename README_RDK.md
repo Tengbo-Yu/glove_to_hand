@@ -38,8 +38,8 @@ bash teleop_direct_hand.sh
 
 服务绑定 `10.1.10.166:8866`。启动时只监听；收到第一帧有效右手关键点后
 才连接并使能 Hand 2。首帧从实测关节角按最大 `6 rad/s` 接入；默认以
-200 Hz 输出并使用 `0.02 s` 轻量插值。`KP=3.0`、`KD=0.1`、电流限制
-`1.0 A`；连续 1 秒没有有效命令会自动失能。
+200 Hz 输出并使用 `0.02 s` 轻量插值。`KP=3.5`、`KD=0.1`、电流限制
+`1.5 A`；连续 1 秒没有有效命令会自动失能。
 
 ### 2. RDK 小主机：启动右手套发送
 
@@ -146,7 +146,7 @@ HOST_RETARGET_HOST=<主机IP> bash teleop_dual_rdk_keypoints.sh
 
 dual 参数已与单手版本对齐：手套侧 `120 Hz`，Hand 2 侧 `200 Hz`、
 `smooth_tau=0.02 s`、`max_joint_velocity=6 rad/s`、命令看门狗 `1 s`、
-`KP=3.0`、`KD=0.1`、电流限制 `1.0 A`。retarget 不再统一覆盖为 `0.6`，
+`KP=3.5`、`KD=0.1`、电流限制 `1.5 A`。retarget 不再统一覆盖为 `0.6`，
 而是与单手一样保留左右手各自 YAML 中的 `lp_alpha` 和 `norm_delta`。
 
 ## 有线网口配置
