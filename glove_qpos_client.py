@@ -100,7 +100,8 @@ def parse_args():
     parser.add_argument("--device-name", default="glove", help="wuji_sdk device name for Wuji Glove.")
     parser.add_argument("--config", default=None, help="Hand 2 retargeting YAML. Used only for --stream-mode=qpos.")
     parser.add_argument("--stream-mode", choices=("keypoints", "qpos"), default="keypoints", help="Send raw glove keypoints for robot-side retargeting, or retarget locally and send qpos.")
-    parser.add_argument("--glove-stream", choices=("hand_skeleton", "offline_hand_skeleton"), default="offline_hand_skeleton", help="Wuji SDK stream for keypoint input.")
+    parser.add_argument("--glove-stream", choices=("hand_skeleton", "offline_hand_skeleton"), default="hand_skeleton", help="Wuji SDK stream for keypoint input. hand_skeleton matches the official teleop path.")
+    parser.add_argument("--emf-rate-divider", type=int, default=0, help="Set the glove EMF/derived-stream rate divider. 1 is full rate (~120 Hz); 0 keeps the device value.")
     parser.add_argument("--wuji-log-level", default="error", choices=("trace", "debug", "info", "warn", "warning", "error", "off"), help="wuji_sdk internal log level.")
     parser.add_argument("--duration", type=float, default=0.0, help="Run time in seconds. Default 0 runs until Ctrl-C.")
     parser.add_argument("--rate", type=float, default=30.0, help="Frame send rate in Hz.")
@@ -154,6 +155,7 @@ def run(args):
         sn=args.glove_sn or None,
         stream=args.glove_stream,
         sdk_log_level=args.wuji_log_level,
+        emf_rate_divider=args.emf_rate_divider or None,
     )
     retargeter = pipeline.retargeter if pipeline is not None else None
 

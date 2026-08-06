@@ -79,6 +79,18 @@ class IntervalStats:
         values = self.samples.get(name, ())
         return max(values) if values else 0.0
 
+    def min(self, name):
+        values = self.samples.get(name, ())
+        return min(values) if values else 0.0
+
+    def span(self, name):
+        values = self.samples.get(name, ())
+        return max(values) - min(values) if values else 0.0
+
+    def last(self, name):
+        values = self.samples.get(name, ())
+        return values[-1] if values else 0.0
+
     def percentile(self, name, percentile):
         values = self.samples.get(name, ())
         if not values:
@@ -155,6 +167,7 @@ def parse_args():
     parser.add_argument("--max-joint-velocity", type=float, default=0.0, help="Optional output slew limit in rad/s. 0 disables slew limiting.")
     parser.add_argument("--disable-output-smoothing", action="store_true", help="Send each retargeted qpos directly without output smoothing/resampling.")
     parser.add_argument("--retarget-lp-alpha", type=float, default=0.0, help="Override retargeter low-pass alpha. 0 keeps config value.")
+    parser.add_argument("--retarget-norm-delta", type=float, default=None, help="Override retargeter motion deadband. Lower is more responsive; omit to keep the YAML value.")
     parser.add_argument("--print-every", type=float, default=1.0, help="Seconds between status prints.")
     parser.add_argument("--socket-timeout", type=float, default=1.0, help="Seconds to wait for a glove frame before printing a timeout warning.")
     parser.add_argument("--command-timeout", type=float, default=1.0, help="Disable Hand 2 if no valid frame arrives for this many seconds. 0 disables the watchdog.")
@@ -277,8 +290,16 @@ def serve_connection(conn, peer, args, stop_requested):
         pipeline = Hand2RetargetPipeline(args.config, args.hand)
         retargeter = pipeline.retargeter
         if args.retarget_lp_alpha > 0:
+            if args.retarget_lp_alpha > 1:
+                raise ValueError("--retarget-lp-alpha must be in (0, 1]")
             retargeter.lp_filter.alpha = args.retarget_lp_alpha
             print(f"Retarget low-pass alpha override: {args.retarget_lp_alpha}")
+        retarget_norm_delta = getattr(args, "retarget_norm_delta", None)
+        if retarget_norm_delta is not None:
+            if retarget_norm_delta < 0:
+                raise ValueError("--retarget-norm-delta must be non-negative")
+            retargeter.optimizer.norm_delta = retarget_norm_delta
+            print(f"Retarget norm_delta override: {retarget_norm_delta}")
         set_optimizer_timing(retargeter, args.debug_latency)
         if args.debug_latency:
             reset_optimizer_timing(retargeter)
@@ -298,7 +319,11 @@ def serve_connection(conn, peer, args, stop_requested):
                 with receiver_lock:
                     first_message = receiver_state["message"]
                     receiver_eof = receiver_state["eof"]
-                if first_message is not None:
+                actionable_message = first_message is not None and (
+                    first_message["type"] != "keypoints_frame"
+                    or not np.allclose(first_message["keypoints"], 0)
+                )
+                if actionable_message:
                     print(
                         f"First valid {args.hand} frame received "
                         f"(seq={first_message['seq']}); connecting Hand 2."
@@ -317,6 +342,18 @@ def serve_connection(conn, peer, args, stop_requested):
                 time.sleep(0.02)
             else:
                 return
+
+            # The analytical optimizer has a one-time cold-start cost. Run it
+            # while the hand is still disabled so the first post-enable command
+            # does not inherit that latency spike. The receiver keeps draining
+            # newer RDK frames while this warm-up and hardware setup run.
+            if first_message["type"] == "keypoints_frame":
+                warmup_start = time.perf_counter()
+                pipeline.retarget(first_message["keypoints"])
+                print(
+                    "Retargeter warmed up before Hand 2 enable "
+                    f"({(time.perf_counter() - warmup_start) * 1000.0:.1f} ms)."
+                )
 
             backend = WujiHand2Backend(
                 args.hand,
@@ -451,6 +488,11 @@ def serve_connection(conn, peer, args, stop_requested):
                 hand_start = time.perf_counter()
                 backend.send(command_qpos.reshape(-1))
                 hand_write_ms = (time.perf_counter() - hand_start) * 1000.0
+                if args.debug_latency:
+                    stats.add("thumb_j4_target", command_qpos[0, 3])
+                    feedback = backend.latest_positions()
+                    if feedback is not None:
+                        stats.add("thumb_j4_feedback", feedback[3])
             stats.add("hand_write_ms", hand_write_ms)
             stats.inc("control_ticks")
 
@@ -474,6 +516,10 @@ def serve_connection(conn, peer, args, stop_requested):
                         f"{stats.percentile('hand_write_ms', 95):.1f}/{stats.max('hand_write_ms'):.1f} "
                         f"dropped_socket={int(stats.counters['dropped_socket'])} "
                         f"seq_gap={int(stats.counters['seq_gap'])} "
+                        f"thumb_J4 target/span={stats.last('thumb_j4_target'):.3f}/"
+                        f"{stats.span('thumb_j4_target'):.3f} "
+                        f"feedback/span={stats.last('thumb_j4_feedback'):.3f}/"
+                        f"{stats.span('thumb_j4_feedback'):.3f} "
                         f"thumb={np.round(command_qpos[0], 3).tolist()} "
                         f"index={np.round(command_qpos[1], 3).tolist()} "
                         f"{opt_summary}",

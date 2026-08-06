@@ -45,8 +45,11 @@ conda run -n wuji_new python wuji_hand_test.py --hand right
 
 ```bash
 conda run -n wuji_new python wuji_hand_test.py \
-  --hand right --enable-motion --joint 4 --delta 0.05
+  --hand right --enable-motion --joint 3 --delta 0.05
 ```
+
+`--joint` 使用从 0 开始的设备索引，因此大拇指 J4 是 `3`，索引 `4`
+已经是食指 J1。
 
 ## 3. 单机手套重定向
 
@@ -69,31 +72,25 @@ conda run -n wuji_new python glove_to_hand.py \
 默认配置自动选择：
 
 ```text
-adaptive_analytical_wuji_glove_wuji_hand_2_right.yaml
+config/hand2_right_teleop.yaml
 adaptive_analytical_wuji_glove_wuji_hand_2_left.yaml
 ```
 
 代码会按关节名验证并执行 `URDF → MJCF/设备` 重排；映射失败时拒绝启动，
 不会把未验证顺序的 qpos 发给硬件。
 
-## 4. 三端链路
+## 4. RDK 到 Hand 2 链路
 
-链路为：
+host1 与 robot 在同一台主机时，推荐使用官方同类的单循环直连结构：
 
 ```text
-RDK（手套 keypoints） → 主机（Hand 2 retargeting） → 机器人端（Hand 2）
+RDK（手套 keypoints） → 本机（Hand 2 retargeting + Hand 2）
 ```
 
-机器人端先启动。启动脚本必须显式设置 `ENABLE_HAND2=1`：
+本机先启动；脚本收到第一帧有效命令后才使能 Hand 2：
 
 ```bash
-HAND_SIDE=right ENABLE_HAND2=1 bash teleop_robot_hand.sh
-```
-
-主机端：
-
-```bash
-HAND_SIDE=right ROBOT_HAND_HOST=127.0.0.1 bash teleop_host_bridge.sh
+HAND_SIDE=right bash teleop_direct_hand.sh
 ```
 
 RDK 端：
@@ -105,6 +102,9 @@ HAND_SIDE=right HOST_RETARGET_HOST=10.1.10.166 bash teleop_rdk_keypoints.sh
 所有脚本默认使用 `wuji_new`；可通过 `WUJI_CONDA_ENV=<name>` 覆盖。
 网络协议为 `glove-qpos-v2`，qpos 帧必须携带正确手性并声明
 `joint_order=device`，旧版 v1 客户端会被明确拒绝。
+
+若 host1 和 robot 分属不同机器，仍可使用 `teleop_host_bridge.sh` 与
+`teleop_robot_hand.sh` 的三进程兼容模式。
 
 双手与专用有线网配置见 [README_RDK.md](README_RDK.md)。
 
@@ -120,6 +120,8 @@ HAND_SIDE=right HOST_RETARGET_HOST=10.1.10.166 bash teleop_rdk_keypoints.sh
 | `glove_qpos_client.py` | RDK keypoints/qpos 客户端 |
 | `host_retarget_bridge.py` | 主机重定向桥 |
 | `hand_qpos_server.py` | 机器人端 Hand 2 服务 |
+| `teleop_direct_hand.sh` | 同机低延迟直连入口 |
+| `teleop_tune_hand2.sh` | 官方 Hand 2 可视化标定工具入口 |
 
 停止时默认直接失能，不自动回零。需要回零时显式传
 `--home-on-shutdown`；回零本身也是运动，请先确保工作空间安全。

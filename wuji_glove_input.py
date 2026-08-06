@@ -22,6 +22,7 @@ class WujiGloveDevice:
         sn: Optional[str] = None,
         stream: str = "hand_skeleton",
         sdk_log_level: Optional[str] = "error",
+        emf_rate_divider: Optional[int] = None,
     ):
         import wuji_sdk
         from wuji_sdk import DeviceType, SdkManager, WujiGlove
@@ -37,6 +38,8 @@ class WujiGloveDevice:
             raise ValueError(f"Unsupported Wuji Glove stream {stream!r}")
         if stream != "hand_skeleton" and normalized_side is None:
             raise ValueError(f"hand_side is required for stream={stream!r}")
+        if emf_rate_divider is not None and emf_rate_divider < 1:
+            raise ValueError("emf_rate_divider must be at least 1")
 
         if sdk_log_level:
             wuji_sdk.set_log_level("warn" if sdk_log_level == "warning" else sdk_log_level)
@@ -83,6 +86,16 @@ class WujiGloveDevice:
                     )
                 self._device = self._manager.connect(
                     sn=str(gloves[0].sn), device_name=device_name
+                )
+
+            if emf_rate_divider is not None:
+                divider_resource = self._device.emf_poses_rate_divider()
+                previous_divider = int(divider_resource.get())
+                if previous_divider != emf_rate_divider:
+                    divider_resource.set(int(emf_rate_divider))
+                print(
+                    "Wuji Glove EMF rate divider: "
+                    f"{previous_divider} -> {int(emf_rate_divider)}"
                 )
 
             if stream == "hand_skeleton":
@@ -183,4 +196,3 @@ class WujiGloveDevice:
     def _detect_hand_side(skeleton) -> str:
         frame_id = str(skeleton.header.frame_id)
         return "left" if frame_id.startswith("l") else "right"
-

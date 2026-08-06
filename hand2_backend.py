@@ -72,6 +72,7 @@ class WujiHand2Backend:
         self.enable_timeout = float(enable_timeout)
         self._hand = None
         self._publisher = None
+        self._joint_state_sub = None
         self._enabled = False
         self._last_command = None
 
@@ -171,6 +172,10 @@ class WujiHand2Backend:
             sub.close()
         if frame is None:
             raise TimeoutError("Timed out waiting for Wuji Hand 2 joint_states")
+        return self._positions_from_frame(frame)
+
+    @staticmethod
+    def _positions_from_frame(frame) -> np.ndarray:
         positions = np.full(20, np.nan, dtype=np.float64)
         seen_indices = set()
         unexpected_nids = []
@@ -203,6 +208,20 @@ class WujiHand2Backend:
                 f"device indices {missing_indices} (nids {missing_nids})"
             )
         return positions
+
+    def latest_positions(self) -> Optional[np.ndarray]:
+        """Return the newest non-blocking joint feedback, or None if unavailable."""
+        if getattr(self, "_joint_state_sub", None) is None:
+            self._joint_state_sub = self._hand.joint_states().subscribe()
+        frame = self._joint_state_sub.recv()
+        if frame is None:
+            return None
+        while True:
+            newer = self._joint_state_sub.recv()
+            if newer is None:
+                break
+            frame = newer
+        return self._positions_from_frame(frame)
 
     def _set_with_retry(self, label: str, setter, attempts: int = 3):
         last_error = None
@@ -298,6 +317,15 @@ class WujiHand2Backend:
         self.send(np.zeros(20, dtype=np.float64))
 
     def close(self):
+        joint_state_sub, self._joint_state_sub = (
+            getattr(self, "_joint_state_sub", None),
+            None,
+        )
+        if joint_state_sub is not None:
+            try:
+                joint_state_sub.close()
+            except Exception:
+                pass
         publisher, self._publisher = self._publisher, None
         if publisher is not None:
             try:

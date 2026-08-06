@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument(
         "--glove-stream",
         choices=("hand_skeleton", "offline_hand_skeleton"),
-        default="offline_hand_skeleton",
+        default="hand_skeleton",
     )
     parser.add_argument(
         "--wuji-log-level",

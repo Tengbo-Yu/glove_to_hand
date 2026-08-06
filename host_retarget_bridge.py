@@ -66,6 +66,7 @@ def parse_args():
     parser.add_argument("--socket-timeout", type=float, default=1.0, help="Seconds to wait for keypoint frames before printing a warning.")
     parser.add_argument("--print-every", type=float, default=0.5, help="Seconds between status prints.")
     parser.add_argument("--retarget-lp-alpha", type=float, default=0.0, help="Override retargeter low-pass alpha. 0 keeps config value.")
+    parser.add_argument("--retarget-norm-delta", type=float, default=None, help="Override retargeter motion deadband. Lower is more responsive; omit to keep the YAML value.")
     parser.add_argument("--debug-latency", action="store_true", help="Print timing summaries.")
     return parser.parse_args()
 
@@ -221,8 +222,15 @@ def run(args):
     print(f"Forward robot qpos: {args.robot_host}:{args.robot_port}")
 
     if args.retarget_lp_alpha > 0:
+        if args.retarget_lp_alpha > 1:
+            raise ValueError("--retarget-lp-alpha must be in (0, 1]")
         pipeline.retargeter.lp_filter.alpha = args.retarget_lp_alpha
         print(f"Retarget low-pass alpha override: {args.retarget_lp_alpha}")
+    if args.retarget_norm_delta is not None:
+        if args.retarget_norm_delta < 0:
+            raise ValueError("--retarget-norm-delta must be non-negative")
+        pipeline.retargeter.optimizer.norm_delta = args.retarget_norm_delta
+        print(f"Retarget norm_delta override: {args.retarget_norm_delta}")
 
     stop_requested = False
 

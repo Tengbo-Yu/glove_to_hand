@@ -49,7 +49,12 @@ def parse_args():
         action="store_true",
         help="Explicitly enable Hand 2 and perform the small motion below.",
     )
-    parser.add_argument("--joint", type=int, default=4, help="Device joint index 0..19.")
+    parser.add_argument(
+        "--joint",
+        type=int,
+        default=3,
+        help="Zero-based device joint index 0..19; thumb J4 is index 3.",
+    )
     parser.add_argument("--delta", type=float, default=0.25, help="Test offset in radians.")
     parser.add_argument("--hold", type=float, default=3.0, help="Seconds to hold the target.")
     parser.add_argument("--ramp", type=float, default=0.75, help="Seconds per position ramp.")

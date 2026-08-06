@@ -15,8 +15,9 @@ RIGHT_GLOVE_SN="${RIGHT_GLOVE_SN:-WG1KA03260512012}"
 
 RATE="${RATE:-60}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
-GLOVE_STREAM="${GLOVE_STREAM:-offline_hand_skeleton}"
+GLOVE_STREAM="${GLOVE_STREAM:-hand_skeleton}"
 WUJI_LOG_LEVEL="${WUJI_LOG_LEVEL:-error}"
+EMF_RATE_DIVIDER="${EMF_RATE_DIVIDER:-1}"
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
 
 pids=()
@@ -43,6 +44,7 @@ start_sender() {
     --rate "$RATE"
     --print-every "$PRINT_EVERY"
     --glove-stream "$GLOVE_STREAM"
+    --emf-rate-divider "$EMF_RATE_DIVIDER"
     --wuji-log-level "$WUJI_LOG_LEVEL"
     --stream-mode keypoints
   )

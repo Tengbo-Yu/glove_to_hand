@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
-export ENABLE_HAND2=1
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
-if [[ "${ENABLE_HAND2:-0}" != "1" ]]; then
-  echo "Refusing to energize Hand 2. Re-run with ENABLE_HAND2=1." >&2
-  exit 2
-fi
 
-# Robot side: receive verified device-order qpos and drive one network Hand 2.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Recommended single-host path: receive RDK keypoints, retarget, and drive
+# Hand 2 in one process. This replaces teleop_host_bridge.sh +
+# teleop_robot_hand.sh when host1 and robot are the same machine.
 HAND_SIDE="${HAND_SIDE:-right}"
-ROBOT_BIND_HOST="${ROBOT_BIND_HOST:-127.0.0.1}"
-LEFT_PORT="${LEFT_PORT:-8765}"
-RIGHT_PORT="${RIGHT_PORT:-8767}"
+WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
+RDK_BIND_HOST="${RDK_BIND_HOST:-10.1.10.166}"
+LEFT_PORT="${LEFT_PORT:-8865}"
+RIGHT_PORT="${RIGHT_PORT:-8866}"
 LEFT_HAND_SN="${LEFT_HAND_SN:-}"
 RIGHT_HAND_SN="${RIGHT_HAND_SN:-WH2KA01260730030}"
 LEFT_HAND_ADDRESS="${LEFT_HAND_ADDRESS:-}"
@@ -32,11 +30,13 @@ case "$HAND_SIDE" in
     PORT="${PORT:-$LEFT_PORT}"
     HAND_SN="$LEFT_HAND_SN"
     HAND_ADDRESS="$LEFT_HAND_ADDRESS"
+    DEFAULT_CONFIG="$SCRIPT_DIR/wuji-retargeting/example/config/adaptive_analytical_wuji_glove_wuji_hand_2_left.yaml"
     ;;
   right)
     PORT="${PORT:-$RIGHT_PORT}"
     HAND_SN="$RIGHT_HAND_SN"
     HAND_ADDRESS="$RIGHT_HAND_ADDRESS"
+    DEFAULT_CONFIG="$SCRIPT_DIR/config/hand2_right_teleop.yaml"
     ;;
   *)
     echo "ERROR: HAND_SIDE must be 'left' or 'right', got '$HAND_SIDE'." >&2
@@ -44,11 +44,14 @@ case "$HAND_SIDE" in
     ;;
 esac
 
+RETARGET_CONFIG="${RETARGET_CONFIG:-$DEFAULT_CONFIG}"
+
 CMD=(
   conda run --no-capture-output -n "$WUJI_CONDA_ENV" python -u "$SCRIPT_DIR/hand_qpos_server.py"
-  --bind-host "$ROBOT_BIND_HOST"
+  --bind-host "$RDK_BIND_HOST"
   --port "$PORT"
   --hand "$HAND_SIDE"
+  --config "$RETARGET_CONFIG"
   --enable-hand
   --keep-listening
   --control-rate "$CONTROL_RATE"
@@ -58,6 +61,7 @@ CMD=(
   --kp "$KP"
   --kd "$KD"
   --current-limit "$CURRENT_LIMIT"
+  --print-every "$PRINT_EVERY"
   --no-home-on-shutdown
 )
 
@@ -68,8 +72,11 @@ if [[ -n "$HAND_ADDRESS" ]]; then
   CMD+=(--hand-address "$HAND_ADDRESS")
 fi
 if [[ "$DEBUG_LATENCY" == "1" ]]; then
-  CMD+=(--debug-latency --print-every "$PRINT_EVERY")
+  CMD+=(--debug-latency)
 fi
 
-echo "Robot Hand 2 server: $HAND_SIDE bind=$ROBOT_BIND_HOST:$PORT sn=${HAND_SN:-auto} address=${HAND_ADDRESS:-auto}"
+echo "Direct Hand 2 teleop: RDK -> $RDK_BIND_HOST:$PORT -> $HAND_SIDE Hand 2"
+echo "Hand: sn=${HAND_SN:-auto} address=${HAND_ADDRESS:-auto}"
+echo "Retarget config: $RETARGET_CONFIG"
+echo "Response: ${CONTROL_RATE}Hz, tau=${SMOOTH_TAU}s, max ${MAX_JOINT_VELOCITY}rad/s"
 "${CMD[@]}"

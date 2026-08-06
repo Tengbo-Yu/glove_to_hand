@@ -21,6 +21,9 @@ for _path in (RETARGETING_ROOT, RETARGETING_EXAMPLE):
 def resolve_hand2_config(config, hand_side: str) -> Path:
     if config:
         return Path(config).expanduser().resolve()
+    project_profile = PROJECT_ROOT / "config" / f"hand2_{hand_side}_teleop.yaml"
+    if project_profile.is_file():
+        return project_profile.resolve()
     return (
         RETARGETING_EXAMPLE
         / "config"
@@ -79,4 +82,3 @@ class Hand2RetargetPipeline:
         if qpos.shape != (20,) or not np.isfinite(qpos).all():
             raise ValueError(f"Retargeter produced invalid Hand 2 qpos {qpos.shape}")
         return qpos[self.qpos_permutation]
-
