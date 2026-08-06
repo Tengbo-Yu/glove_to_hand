@@ -70,6 +70,35 @@ def make_keypoints_message(seq, keypoints, timestamp, hand_side, debug=None):
     return message
 
 
+def make_ack_message(
+    seq,
+    client_probe_perf,
+    server_queue_ms,
+    server_frame_ms,
+    server_retarget_ms,
+):
+    """Build a diagnostic ACK that lets the sender measure RTT on one clock.
+
+    ``client_probe_perf`` is deliberately echoed instead of comparing wall
+    clocks on the RDK and host.  The latter can be offset by milliseconds (or
+    seconds), which makes a one-way ``time.time()`` latency misleading.
+    """
+    values = {
+        "client_probe_perf": float(client_probe_perf),
+        "server_queue_ms": float(server_queue_ms),
+        "server_frame_ms": float(server_frame_ms),
+        "server_retarget_ms": float(server_retarget_ms),
+    }
+    if not all(np.isfinite(value) for value in values.values()):
+        raise ValueError("ack timings must contain only finite values")
+    return {
+        "type": "ack",
+        "protocol": PROTOCOL_NAME,
+        "seq": int(seq),
+        **values,
+    }
+
+
 def encode_message(message):
     return (json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -110,6 +139,19 @@ def decode_message(line):
         if not np.isfinite(keypoints).all():
             raise ValueError("keypoints must contain only finite values")
         message["keypoints"] = keypoints
+    elif message_type == "ack":
+        message["seq"] = int(message.get("seq", -1))
+        for key in (
+            "client_probe_perf",
+            "server_queue_ms",
+            "server_frame_ms",
+            "server_retarget_ms",
+        ):
+            value = float(message.get(key, 0.0))
+            if not np.isfinite(value):
+                raise ValueError(f"ack {key} must be finite")
+            message[key] = value
+        return message
     else:
         raise ValueError(f"unsupported message type {message_type!r}")
 

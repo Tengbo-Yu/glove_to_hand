@@ -1,12 +1,20 @@
 import argparse
+import select
 import signal
 import socket
+import threading
 import time
 from collections import defaultdict
 
 import numpy as np
 
-from qpos_protocol import encode_message, make_hello_message, make_keypoints_message, make_qpos_message
+from qpos_protocol import (
+    decode_message,
+    encode_message,
+    make_hello_message,
+    make_keypoints_message,
+    make_qpos_message,
+)
 from retargeting_hand2 import Hand2RetargetPipeline
 from wuji_glove_input import WujiGloveDevice
 
@@ -132,6 +140,55 @@ def open_socket(host, port, connect_timeout):
     return sock
 
 
+def receive_latency_acks(sock, stop_event, stats, stats_lock):
+    """Receive optional server ACKs without interfering with frame sending."""
+    buffer = b""
+    while not stop_event.is_set():
+        try:
+            readable, _, _ = select.select([sock], [], [], 0.2)
+            if not readable:
+                continue
+            chunk = sock.recv(65536)
+            if not chunk:
+                return
+            buffer += chunk
+        except (OSError, socket.timeout, ValueError):
+            if not stop_event.is_set():
+                with stats_lock:
+                    stats.inc("ack_recv_errors")
+            return
+
+        while b"\n" in buffer:
+            line, _, buffer = buffer.partition(b"\n")
+            try:
+                message = decode_message(line)
+                if message["type"] != "ack":
+                    continue
+                rtt_ms = max(
+                    0.0,
+                    (time.perf_counter() - message["client_probe_perf"]) * 1000.0,
+                )
+                # The residual is the round-trip transport, client encode/
+                # receive, and server ACK-send cost after removing server-local
+                # queue + frame processing. It is intentionally not called
+                # one-way network latency.
+                transport_residual_ms = max(
+                    0.0,
+                    rtt_ms
+                    - message["server_queue_ms"]
+                    - message["server_frame_ms"],
+                )
+                with stats_lock:
+                    stats.add("ack_rtt_ms", rtt_ms)
+                    stats.add("ack_server_queue_ms", message["server_queue_ms"])
+                    stats.add("ack_server_frame_ms", message["server_frame_ms"])
+                    stats.add("ack_server_retarget_ms", message["server_retarget_ms"])
+                    stats.add("ack_transport_residual_ms", transport_residual_ms)
+            except (KeyError, TypeError, ValueError):
+                with stats_lock:
+                    stats.inc("ack_decode_errors")
+
+
 def run(args):
     pipeline = (
         Hand2RetargetPipeline(args.config, args.hand)
@@ -160,6 +217,10 @@ def run(args):
     retargeter = pipeline.retargeter if pipeline is not None else None
 
     sock = None
+    ack_stop = threading.Event()
+    ack_receiver = None
+    ack_stats = IntervalStats()
+    ack_stats_lock = threading.Lock()
     stop_requested = False
     def request_stop(signum, frame):
         nonlocal stop_requested
@@ -175,6 +236,14 @@ def run(args):
         print('----- hello ')
         sock.sendall(encode_message(make_hello_message(args.hand, time.time())))
         print(f"Streaming {args.stream_mode} frames to {args.host}:{args.port}")
+        if args.debug_latency:
+            ack_receiver = threading.Thread(
+                target=receive_latency_acks,
+                args=(sock, ack_stop, ack_stats, ack_stats_lock),
+                name="latency-ack-receiver",
+                daemon=True,
+            )
+            ack_receiver.start()
 
         interval = 1.0 / args.rate
         interval_ms = interval * 1000.0
@@ -182,9 +251,10 @@ def run(args):
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
         seq = 0
         skipped_cached = 0
-        last_print = 0.0
         report_start = time.monotonic()
+        last_print = report_start
         last_loop_start = None
+        last_fresh_frame = None
         next_tick = time.monotonic()
         stats = IntervalStats()
         set_optimizer_timing(retargeter, args.debug_latency)
@@ -205,6 +275,15 @@ def run(args):
 
             glove_debug = input_device.get_debug_stats() if hasattr(input_device, "get_debug_stats") else {}
             got_fresh_frame = glove_debug.get("last_poll_new_frames", 1) > 0
+            if got_fresh_frame:
+                fresh_now = time.perf_counter()
+                stats.inc("fresh_frames")
+                if last_fresh_frame is not None:
+                    stats.add(
+                        "fresh_period_ms",
+                        (fresh_now - last_fresh_frame) * 1000.0,
+                    )
+                last_fresh_frame = fresh_now
             if args.debug_latency and glove_debug:
                 stats.inc("cache_hits", 1 if not got_fresh_frame else 0)
                 stats.inc("sdk_drained", glove_debug.get("last_poll_drained_frames", 0))
@@ -249,13 +328,17 @@ def run(args):
                     print(qpos)
 
             debug_payload = None
+            client_probe_perf = None
             if args.debug_latency:
+                client_probe_perf = time.perf_counter()
                 debug_payload = {
                     "client_glove_ms": round(glove_ms, 3),
                     "client_retarget_ms": round(retarget_ms, 3),
                     "client_glove_cache_hit": glove_debug.get("last_poll_new_frames", 0) == 0,
                     "client_glove_age_ms": glove_debug.get("last_cache_age_ms"),
                     "client_sdk_drained": glove_debug.get("last_poll_drained_frames", 0),
+                    "request_ack": True,
+                    "client_probe_perf": client_probe_perf,
                 }
 
             encode_start = time.perf_counter()
@@ -294,9 +377,31 @@ def run(args):
                 if args.debug_latency:
                     elapsed = max(now - report_start, 1e-9)
                     fps = stats.count("work_ms") / elapsed
+                    fresh_fps = stats.counters["fresh_frames"] / elapsed
                     opt_summary = optimizer_timing_summary(retargeter)
+                    with ack_stats_lock:
+                        ack_count = ack_stats.count("ack_rtt_ms")
+                        ack_summary = (
+                            f"ack={ack_count} "
+                            f"app_rtt_ms avg/p95/max={ack_stats.avg('ack_rtt_ms'):.1f}/"
+                            f"{ack_stats.percentile('ack_rtt_ms', 95):.1f}/"
+                            f"{ack_stats.max('ack_rtt_ms'):.1f} "
+                            f"server_queue_ms p95/max="
+                            f"{ack_stats.percentile('ack_server_queue_ms', 95):.1f}/"
+                            f"{ack_stats.max('ack_server_queue_ms'):.1f} "
+                            f"server_retarget_ms p95/max="
+                            f"{ack_stats.percentile('ack_server_retarget_ms', 95):.1f}/"
+                            f"{ack_stats.max('ack_server_retarget_ms'):.1f} "
+                            f"transport_rtt_residual_ms p95/max="
+                            f"{ack_stats.percentile('ack_transport_residual_ms', 95):.1f}/"
+                            f"{ack_stats.max('ack_transport_residual_ms'):.1f}"
+                        )
+                        ack_stats.reset()
                     print(
                         f"latency-client sent={seq} fps={fps:.1f} "
+                        f"fresh_fps={fresh_fps:.1f} "
+                        f"fresh_period_ms p95/max={stats.percentile('fresh_period_ms', 95):.1f}/"
+                        f"{stats.max('fresh_period_ms'):.1f} "
                         f"loop_ms avg/p95/max={stats.avg('loop_period_ms'):.1f}/"
                         f"{stats.percentile('loop_period_ms', 95):.1f}/{stats.max('loop_period_ms'):.1f} "
                         f"glove_ms avg/max={stats.avg('glove_ms'):.1f}/{stats.max('glove_ms'):.1f} "
@@ -309,6 +414,7 @@ def run(args):
                         f"cache_hits={int(stats.counters['cache_hits'])} "
                         f"glove_age_ms max={stats.max('glove_age_ms'):.1f} "
                         f"sdk_drained={int(stats.counters['sdk_drained'])} "
+                        f"{ack_summary} "
                         f"{opt_summary}",
                         flush=True,
                     )
@@ -341,10 +447,13 @@ def run(args):
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)
         if sock is not None:
+            ack_stop.set()
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+            if ack_receiver is not None:
+                ack_receiver.join(timeout=0.5)
             sock.close()
         cleanup_input_device(input_device)
         print("Stopped. Glove disconnected and socket closed.")

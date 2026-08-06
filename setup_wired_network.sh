@@ -5,21 +5,27 @@ set -euo pipefail
 # Usage:
 #   bash setup_wired_network.sh local [iface]
 #   bash setup_wired_network.sh host [iface]
+#   bash setup_wired_network.sh host-shared [iface]
 
 ROLE="${1:-local}"
 IFACE_ARG="${2:-}"
 
 LOCAL_IFACE="${LOCAL_IFACE:-enx00e04c584b78}"
-HOST_IFACE="${HOST_IFACE:-${ROBOT_IFACE:-enx6c1ff7158ced}}"
+# This host's built-in 2.5 GbE port is reserved for the dedicated RDK link.
+# Override HOST_IFACE when using a USB Ethernet adapter instead.
+HOST_IFACE="${HOST_IFACE:-${ROBOT_IFACE:-enp8s0}}"
+HOST_SHARED_IFACE="${HOST_SHARED_IFACE:-enx6c1ff7d6f986}"
 LOCAL_IP="${LOCAL_WIRED_IP:-192.168.126.10/24}"
 HOST_IP="${HOST_WIRED_IP:-${ROBOT_WIRED_IP:-192.168.126.20/24}}"
 
 usage() {
-  echo "Usage: $0 {local|host} [iface]" >&2
+  echo "Usage: $0 {local|host|host-shared} [iface]" >&2
   echo "  local default: iface=$LOCAL_IFACE ip=$LOCAL_IP peer=${HOST_IP%/*}" >&2
   echo "  host  default: iface=$HOST_IFACE ip=$HOST_IP peer=${LOCAL_IP%/*}" >&2
+  echo "  host-shared:   iface=$HOST_SHARED_IFACE add ip=$HOST_IP (preserve existing addresses)" >&2
 }
 
+ADDRESS_MODE="replace"
 case "$ROLE" in
   local|glove|rdk)
     IFACE="${IFACE_ARG:-$LOCAL_IFACE}"
@@ -30,6 +36,12 @@ case "$ROLE" in
     IFACE="${IFACE_ARG:-$HOST_IFACE}"
     IP_CIDR="$HOST_IP"
     PEER_IP="${LOCAL_IP%/*}"
+    ;;
+  host-shared|shared)
+    IFACE="${IFACE_ARG:-$HOST_SHARED_IFACE}"
+    IP_CIDR="$HOST_IP"
+    PEER_IP="${LOCAL_IP%/*}"
+    ADDRESS_MODE="add"
     ;;
   -h|--help|help)
     usage
@@ -84,7 +96,19 @@ configure_with_ip() {
   fi
 }
 
-if ! configure_with_nmcli; then
+configure_additive_with_ip() {
+  echo "Adding a secondary address without changing existing Hand 2 networking."
+  sudo ip link set "$IFACE" up
+  if ip -o -4 addr show dev "$IFACE" | awk '{print $4}' | grep -Fxq "$IP_CIDR"; then
+    echo "Secondary address already present: $IP_CIDR"
+  else
+    sudo ip addr add "$IP_CIDR" dev "$IFACE"
+  fi
+}
+
+if [[ "$ADDRESS_MODE" == "add" ]]; then
+  configure_additive_with_ip
+elif ! configure_with_nmcli; then
   configure_with_ip
 fi
 
@@ -95,6 +119,9 @@ echo "Configured $ROLE wired teleop network:"
 echo "  iface: $IFACE"
 echo "  ip:    $IP_CIDR"
 echo "  peer:  $PEER_IP"
+if [[ "$ADDRESS_MODE" == "add" ]]; then
+  echo "  note:  secondary address is runtime-only; existing addresses were preserved"
+fi
 echo ""
 echo "Route to peer:"
 ip route get "$PEER_IP" || true

@@ -50,12 +50,31 @@ RIGHT_GLOVE_SN=WG1KA03260512012 bash teleop_rdk_keypoints.sh
 
 发送端默认 120 Hz 轮询并持续发送最近帧，使用官方 `hand_skeleton` 数据流；
 持续帧让 retarget 低通在 SDK 新帧之间继续收敛，避免输出呈阶梯状。
-启动时还会把手套持久化的 `emf_poses_rate_divider` 明确设为 `1`，确保
-`hand_skeleton` 恢复约 120 Hz，而不是 divider=4 时的约 30 Hz。
+手套固件 v0.11.2 不一定提供 `algorithms.emf_poses.rate_divider`，因此脚本
+默认不再写这个资源；实际传感器更新率以延迟诊断输出的 `fresh_fps` 为准。
 这两个脚本都默认右手，因此当前地址和序列号不变时也可直接运行。
 
-如需分段检查延迟，在两个终端都增加 `DEBUG_LATENCY=1`。RDK 会报告 SDK
-取帧、缓存和网络发送耗时，本机会报告网络帧年龄、重定向和 Hand 2 写入耗时。
+如需分段检查延迟，在两个终端都增加 `DEBUG_LATENCY=1`：
+
+```bash
+# 本机
+DEBUG_LATENCY=1 HAND_SIDE=right bash teleop_direct_hand.sh
+
+# RDK（需要同步本仓库中相同版本的 glove_qpos_client.py 和 qpos_protocol.py）
+DEBUG_LATENCY=1 HAND_SIDE=right bash teleop_rdk_keypoints.sh
+```
+
+主要观察以下字段：
+
+- `fresh_fps`、`fresh_period_ms`：真正的新手套帧率和断帧时间；
+- `app_rtt_ms`：从 RDK 发送、主机排队并完成 retarget、再回到 RDK 的 RTT；
+- `transport_rtt_residual_ms`：扣除主机排队和处理后的往返传输余量；
+- `server_queue_ms`、`server_retarget_ms`：主机控制排队和 retarget 解算；
+- `hand_write_ms`：向 Hand 2 发布命令的耗时。
+
+这里的 RTT 使用 RDK 自己的单调时钟测量，不要求两台机器时钟同步。
+`clock_wire_age_ms` 只用于参考；若两机没有 PTP/NTP 同步，不能把它当作
+准确的单向网络延迟。
 
 停止时先在 RDK 端按 `Ctrl-C`；本机命令看门狗会使 Hand 2 失能，再停止
 本机服务。
@@ -131,7 +150,7 @@ HOST_RETARGET_HOST=<主机IP> bash teleop_dual_rdk_keypoints.sh
 
 ```bash
 bash setup_wired_network.sh local   # RDK 端
-bash setup_wired_network.sh host    # 主机端
+bash setup_wired_network.sh host    # 主机端，当前默认使用 enp8s0
 ```
 
 如果网口名不同：
@@ -140,6 +159,17 @@ bash setup_wired_network.sh host    # 主机端
 bash setup_wired_network.sh local <网口名>
 bash setup_wired_network.sh host <网口名>
 ```
+
+如果主机与 Hand 2、RDK 接在同一个交换机上，不要使用会替换接口地址的
+`host` 模式。应在 Hand 2 接口上追加第二个网段：
+
+```bash
+# 保留主机到 Hand 2 的 192.168.1.200/24，同时追加 192.168.126.20/24
+bash setup_wired_network.sh host-shared enx6c1ff7d6f986
+```
+
+该模式只做运行时追加，不会删除现有地址；重启后需要重新执行。当前拓扑中，
+Hand 2 继续使用 `192.168.1.111`，RDK 使用 `192.168.126.10`。
 
 ## RDK 双网口建议配置
 

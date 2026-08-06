@@ -1,4 +1,5 @@
 import socket
+import threading
 import time
 import unittest
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from qpos_protocol import (
     decode_message,
     encode_message,
     make_hello_message,
+    make_ack_message,
     make_keypoints_message,
     make_qpos_message,
 )
@@ -59,6 +61,77 @@ class EnableGateTest(unittest.TestCase):
             serve_connection(server_sock, ("local", 0), args, lambda: False)
 
         backend_class.assert_not_called()
+
+
+class LatencyAckConnectionTest(unittest.TestCase):
+    def test_debug_connection_acks_after_retarget(self):
+        server_sock, client_sock = socket.socketpair()
+        args = SimpleNamespace(
+            socket_timeout=0.05,
+            config=None,
+            hand="right",
+            retarget_lp_alpha=0.0,
+            retarget_norm_delta=None,
+            debug_latency=True,
+            enable_hand=False,
+            control_rate=200.0,
+            duration=0.25,
+            disable_output_smoothing=True,
+            smooth_tau=0.0,
+            max_joint_velocity=0.0,
+            command_timeout=1.0,
+            print_every=10.0,
+            debug_slow_ms=100.0,
+        )
+        fake_retargeter = SimpleNamespace(
+            lp_filter=SimpleNamespace(alpha=0.2),
+            optimizer=SimpleNamespace(norm_delta=0.04),
+        )
+        fake_pipeline = SimpleNamespace(
+            config_path="fake-hand2.yaml",
+            retargeter=fake_retargeter,
+            retarget=lambda keypoints: np.zeros(20, dtype=np.float64),
+        )
+
+        try:
+            client_sock.settimeout(1.0)
+            with patch(
+                "hand_qpos_server.Hand2RetargetPipeline",
+                return_value=fake_pipeline,
+            ):
+                server_thread = threading.Thread(
+                    target=serve_connection,
+                    args=(server_sock, ("local", 0), args, lambda: False),
+                    daemon=True,
+                )
+                server_thread.start()
+                probe = time.perf_counter()
+                client_sock.sendall(
+                    encode_message(
+                        make_keypoints_message(
+                            11,
+                            np.ones((21, 3), dtype=np.float64),
+                            time.time(),
+                            "right",
+                            debug={
+                                "request_ack": True,
+                                "client_probe_perf": probe,
+                            },
+                        )
+                    )
+                )
+                ack = decode_message(SocketLineReader(client_sock).read_line())
+
+                self.assertEqual(ack["type"], "ack")
+                self.assertEqual(ack["seq"], 11)
+                self.assertEqual(ack["client_probe_perf"], probe)
+                self.assertGreaterEqual(ack["server_queue_ms"], 0.0)
+                self.assertGreaterEqual(ack["server_frame_ms"], ack["server_retarget_ms"])
+                server_thread.join(timeout=1.0)
+                self.assertFalse(server_thread.is_alive())
+        finally:
+            client_sock.close()
+            server_sock.close()
 
 
 class ReadLatestQposTest(unittest.TestCase):
@@ -112,6 +185,23 @@ class ReadLatestQposTest(unittest.TestCase):
 
 
 class ProtocolDebugTest(unittest.TestCase):
+    def test_latency_ack_round_trips(self):
+        message = make_ack_message(
+            seq=9,
+            client_probe_perf=1234.5,
+            server_queue_ms=1.2,
+            server_frame_ms=3.4,
+            server_retarget_ms=2.8,
+        )
+        decoded = decode_message(encode_message(message))
+
+        self.assertEqual(decoded["type"], "ack")
+        self.assertEqual(decoded["seq"], 9)
+        self.assertEqual(decoded["client_probe_perf"], 1234.5)
+        self.assertEqual(decoded["server_queue_ms"], 1.2)
+        self.assertEqual(decoded["server_frame_ms"], 3.4)
+        self.assertEqual(decoded["server_retarget_ms"], 2.8)
+
     def test_qpos_debug_metadata_round_trips(self):
         qpos = np.ones((5, 4), dtype=np.float64)
         message = make_qpos_message(

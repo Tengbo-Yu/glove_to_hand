@@ -8,7 +8,7 @@ from collections import defaultdict
 import numpy as np
 
 from hand2_backend import WujiHand2Backend
-from qpos_protocol import SocketLineReader, decode_message
+from qpos_protocol import SocketLineReader, decode_message, encode_message, make_ack_message
 from retargeting_hand2 import Hand2RetargetPipeline
 
 
@@ -245,6 +245,7 @@ def serve_connection(conn, peer, args, stop_requested):
         "message": None,
         "dropped": 0,
         "metrics": None,
+        "received_perf": None,
         "version": 0,
         "timeouts": 0,
         "eof": False,
@@ -279,6 +280,7 @@ def serve_connection(conn, peer, args, stop_requested):
                 receiver_state["message"] = message
                 receiver_state["dropped"] += dropped
                 receiver_state["metrics"] = metrics
+                receiver_state["received_perf"] = time.perf_counter()
                 receiver_state["version"] += 1
                 receiver_state["timeouts"] = 0
         receiver_done.set()
@@ -379,7 +381,6 @@ def serve_connection(conn, peer, args, stop_requested):
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
         next_tick = time.monotonic()
         last_tick = next_tick
-        last_print = 0.0
         last_version = -1
         last_seq = None
         last_valid_frame_time = time.monotonic()
@@ -396,9 +397,10 @@ def serve_connection(conn, peer, args, stop_requested):
             print(
                 "Output initialized from measured Hand 2 joint positions; "
                 "the first teleop frame will be rate-limited."
-            )
+        )
         stats = IntervalStats()
         report_start = time.monotonic()
+        last_print = report_start
         interval_ms = control_interval * 1000.0
         slow_ms = args.debug_slow_ms if args.debug_slow_ms > 0 else max(50.0, 2.0 * interval_ms)
 
@@ -420,6 +422,7 @@ def serve_connection(conn, peer, args, stop_requested):
                 message = receiver_state["message"]
                 dropped = receiver_state["dropped"]
                 read_metrics = receiver_state["metrics"]
+                received_perf = receiver_state["received_perf"]
                 receiver_state["dropped"] = 0
             if eof:
                 break
@@ -428,9 +431,15 @@ def serve_connection(conn, peer, args, stop_requested):
             seq = last_seq
             retarget_ms = 0.0
             wire_age_ms = 0.0
+            server_queue_ms = 0.0
             seq_gap = 0
             if message is not None and version != last_version:
                 frame_start = time.perf_counter()
+                if received_perf is not None:
+                    server_queue_ms = max(
+                        0.0, (frame_start - received_perf) * 1000.0
+                    )
+                    stats.add("server_queue_ms", server_queue_ms)
                 last_version = version
                 last_valid_frame_time = time.monotonic()
                 received += 1
@@ -462,11 +471,35 @@ def serve_connection(conn, peer, args, stop_requested):
                 stats.add("retarget_ms", retarget_ms)
                 frame_ms = (time.perf_counter() - frame_start) * 1000.0
                 stats.add("server_frame_ms", frame_ms)
+                debug_payload = message.get("debug") or {}
+                if args.debug_latency and debug_payload.get("request_ack"):
+                    client_probe_perf = debug_payload.get("client_probe_perf")
+                    if client_probe_perf is not None:
+                        ack_start = time.perf_counter()
+                        try:
+                            conn.sendall(
+                                encode_message(
+                                    make_ack_message(
+                                        seq,
+                                        client_probe_perf,
+                                        server_queue_ms,
+                                        frame_ms,
+                                        retarget_ms,
+                                    )
+                                )
+                            )
+                            stats.add(
+                                "ack_send_ms",
+                                (time.perf_counter() - ack_start) * 1000.0,
+                            )
+                        except (OSError, ValueError) as exc:
+                            print(f"Latency ACK failed: {exc}")
                 if args.debug_latency and frame_ms >= slow_ms:
                     print(
                         f"slow-server seq={seq} frame_ms={frame_ms:.1f} "
                         f"wire_age_ms={wire_age_ms:.1f} "
                         f"retarget_ms={retarget_ms:.1f} "
+                        f"server_queue_ms={server_queue_ms:.1f} "
                         f"socket_wait_ms={(read_metrics or {}).get('socket_wait_ms', 0.0):.1f} "
                         f"drain_ms={(read_metrics or {}).get('socket_drain_ms', 0.0):.1f} "
                         f"dropped_in_read={dropped} seq_gap={seq_gap}",
@@ -506,14 +539,19 @@ def serve_connection(conn, peer, args, stop_requested):
                     print(
                         f"latency-server recv={received} recv_fps={recv_fps:.1f} "
                         f"control_fps={control_fps:.1f} seq={seq} "
-                        f"wire_age_ms avg/p95/max={stats.avg('wire_age_ms'):.1f}/"
+                        f"clock_wire_age_ms avg/p95/max={stats.avg('wire_age_ms'):.1f}/"
                         f"{stats.percentile('wire_age_ms', 95):.1f}/{stats.max('wire_age_ms'):.1f} "
+                        f"server_queue_ms avg/p95/max={stats.avg('server_queue_ms'):.1f}/"
+                        f"{stats.percentile('server_queue_ms', 95):.1f}/"
+                        f"{stats.max('server_queue_ms'):.1f} "
                         f"retarget_ms avg/p95/max={stats.avg('retarget_ms'):.1f}/"
                         f"{stats.percentile('retarget_ms', 95):.1f}/{stats.max('retarget_ms'):.1f} "
                         f"socket_wait_ms avg/max={stats.avg('socket_wait_ms'):.1f}/{stats.max('socket_wait_ms'):.1f} "
                         f"drain_ms avg/max={stats.avg('socket_drain_ms'):.1f}/{stats.max('socket_drain_ms'):.1f} "
                         f"hand_write_ms avg/p95/max={stats.avg('hand_write_ms'):.1f}/"
                         f"{stats.percentile('hand_write_ms', 95):.1f}/{stats.max('hand_write_ms'):.1f} "
+                        f"ack_send_ms avg/max={stats.avg('ack_send_ms'):.2f}/"
+                        f"{stats.max('ack_send_ms'):.2f} "
                         f"dropped_socket={int(stats.counters['dropped_socket'])} "
                         f"seq_gap={int(stats.counters['seq_gap'])} "
                         f"thumb_J4 target/span={stats.last('thumb_j4_target'):.3f}/"
