@@ -11,7 +11,9 @@ RIGHT_RDK_PORT="${RIGHT_RDK_PORT:-8866}"
 LEFT_ROBOT_PORT="${LEFT_ROBOT_PORT:-8765}"
 RIGHT_ROBOT_PORT="${RIGHT_ROBOT_PORT:-8767}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
-RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0.6}"
+# 0 keeps each side's config value, matching teleop_direct_hand.sh:
+# right uses config/hand2_right_teleop.yaml; left uses the upstream Hand 2 profile.
+RETARGET_LP_ALPHA="${RETARGET_LP_ALPHA:-0}"
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
 
 pids=()
@@ -29,7 +31,7 @@ start_bridge() {
   local listen_port="$2"
   local robot_port="$3"
   local cmd=(
-    conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/host_retarget_bridge.py"
+    conda run --no-capture-output -n "$WUJI_CONDA_ENV" python -u "$SCRIPT_DIR/host_retarget_bridge.py"
     --bind-host 0.0.0.0
     --listen-port "$listen_port"
     --robot-host "$ROBOT_HAND_HOST"

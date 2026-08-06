@@ -144,6 +144,11 @@ ROBOT_HAND_HOST=<机器人IP> bash teleop_dual_host_bridge.sh
 HOST_RETARGET_HOST=<主机IP> bash teleop_dual_rdk_keypoints.sh
 ```
 
+dual 参数已与单手版本对齐：手套侧 `120 Hz`，Hand 2 侧 `200 Hz`、
+`smooth_tau=0.02 s`、`max_joint_velocity=6 rad/s`、命令看门狗 `1 s`、
+`KP=3.0`、`KD=0.1`、电流限制 `1.0 A`。retarget 不再统一覆盖为 `0.6`，
+而是与单手一样保留左右手各自 YAML 中的 `lp_alpha` 和 `norm_delta`。
+
 ## 有线网口配置
 
 需要配置专用有线网段时：

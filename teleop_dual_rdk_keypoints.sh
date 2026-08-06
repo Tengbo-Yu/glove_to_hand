@@ -13,12 +13,13 @@ RIGHT_GLOVE_NAME="${RIGHT_GLOVE_NAME:-glove_r}"
 LEFT_GLOVE_SN="${LEFT_GLOVE_SN:-WG1JA03260517019}"
 RIGHT_GLOVE_SN="${RIGHT_GLOVE_SN:-WG1KA03260512012}"
 
-RATE="${RATE:-60}"
+RATE="${RATE:-120}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
 GLOVE_STREAM="${GLOVE_STREAM:-hand_skeleton}"
 WUJI_LOG_LEVEL="${WUJI_LOG_LEVEL:-error}"
 EMF_RATE_DIVIDER="${EMF_RATE_DIVIDER:-0}"
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
+SKIP_CACHED_FRAMES="${SKIP_CACHED_FRAMES:-0}"
 
 pids=()
 cleanup() {
@@ -36,7 +37,7 @@ start_sender() {
   local name="$3"
   local sn="$4"
   local cmd=(
-    conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/glove_qpos_client.py"
+    conda run --no-capture-output -n "$WUJI_CONDA_ENV" python -u "$SCRIPT_DIR/glove_qpos_client.py"
     --host "$HOST_RETARGET_HOST"
     --port "$port"
     --hand "$side"
@@ -53,6 +54,9 @@ start_sender() {
   fi
   if [[ "$DEBUG_LATENCY" == "1" ]]; then
     cmd+=(--debug-latency)
+  fi
+  if [[ "$SKIP_CACHED_FRAMES" == "1" ]]; then
+    cmd+=(--skip-cached-frames)
   fi
   echo "RDK keypoint sender: $side -> $HOST_RETARGET_HOST:$port"
   "${cmd[@]}" &

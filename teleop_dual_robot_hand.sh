@@ -15,11 +15,13 @@ LEFT_HAND_SN="${LEFT_HAND_SN:-}"
 RIGHT_HAND_SN="${RIGHT_HAND_SN:-}"
 LEFT_HAND_ADDRESS="${LEFT_HAND_ADDRESS:-}"
 RIGHT_HAND_ADDRESS="${RIGHT_HAND_ADDRESS:-}"
-CONTROL_RATE="${CONTROL_RATE:-60}"
-SMOOTH_TAU="${SMOOTH_TAU:-0.05}"
+CONTROL_RATE="${CONTROL_RATE:-200}"
+SMOOTH_TAU="${SMOOTH_TAU:-0.02}"
+MAX_JOINT_VELOCITY="${MAX_JOINT_VELOCITY:-6.0}"
+COMMAND_TIMEOUT="${COMMAND_TIMEOUT:-1.0}"
 KP="${KP:-3.0}"
 KD="${KD:-0.1}"
-CURRENT_LIMIT="${CURRENT_LIMIT:-1.5}"
+CURRENT_LIMIT="${CURRENT_LIMIT:-1.0}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
 
@@ -39,7 +41,7 @@ start_server() {
   local sn="$3"
   local address="$4"
   local cmd=(
-    conda run -n "$WUJI_CONDA_ENV" python "$SCRIPT_DIR/hand_qpos_server.py"
+    conda run --no-capture-output -n "$WUJI_CONDA_ENV" python -u "$SCRIPT_DIR/hand_qpos_server.py"
     --bind-host 0.0.0.0
     --port "$port"
     --hand "$side"
@@ -48,9 +50,12 @@ start_server() {
     --keep-listening
     --control-rate "$CONTROL_RATE"
     --smooth-tau "$SMOOTH_TAU"
+    --max-joint-velocity "$MAX_JOINT_VELOCITY"
+    --command-timeout "$COMMAND_TIMEOUT"
     --kp "$KP"
     --kd "$KD"
     --current-limit "$CURRENT_LIMIT"
+    --print-every "$PRINT_EVERY"
     --no-home-on-shutdown
   )
   if [[ -n "$sn" ]]; then
@@ -60,7 +65,7 @@ start_server() {
     cmd+=(--hand-address "$address")
   fi
   if [[ "$DEBUG_LATENCY" == "1" ]]; then
-    cmd+=(--debug-latency --print-every "$PRINT_EVERY")
+    cmd+=(--debug-latency)
   fi
   echo "Robot Hand 2 server: $side port=$port sn=${sn:-auto} address=${address:-auto}"
   "${cmd[@]}" &
