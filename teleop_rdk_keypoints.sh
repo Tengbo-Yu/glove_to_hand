@@ -20,7 +20,9 @@ RATE="${RATE:-120}"
 PRINT_EVERY="${PRINT_EVERY:-0.5}"
 GLOVE_STREAM="${GLOVE_STREAM:-hand_skeleton}"
 WUJI_LOG_LEVEL="${WUJI_LOG_LEVEL:-error}"
-EMF_RATE_DIVIDER="${EMF_RATE_DIVIDER:-1}"
+# Firmware v0.11.2 does not expose algorithms.emf_poses.rate_divider on this
+# glove. Keep the device value unless a future firmware explicitly supports it.
+EMF_RATE_DIVIDER="${EMF_RATE_DIVIDER:-0}"
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
 # The official adapter keeps returning its latest skeleton. Reprocessing that
 # cached frame lets the retarget low-pass converge between lower-rate SDK

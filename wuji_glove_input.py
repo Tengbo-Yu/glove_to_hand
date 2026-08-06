@@ -89,14 +89,24 @@ class WujiGloveDevice:
                 )
 
             if emf_rate_divider is not None:
-                divider_resource = self._device.emf_poses_rate_divider()
-                previous_divider = int(divider_resource.get())
-                if previous_divider != emf_rate_divider:
-                    divider_resource.set(int(emf_rate_divider))
-                print(
-                    "Wuji Glove EMF rate divider: "
-                    f"{previous_divider} -> {int(emf_rate_divider)}"
-                )
+                try:
+                    divider_resource = self._device.emf_poses_rate_divider()
+                    previous_divider = int(divider_resource.get())
+                    if previous_divider != emf_rate_divider:
+                        divider_resource.set(int(emf_rate_divider))
+                    print(
+                        "Wuji Glove EMF rate divider: "
+                        f"{previous_divider} -> {int(emf_rate_divider)}"
+                    )
+                except Exception as exc:
+                    # Firmware v0.11.2 may expose the SDK accessor without the
+                    # backing algorithms.emf_poses.rate_divider resource.
+                    # Streaming itself remains valid, so degrade gracefully.
+                    print(
+                        "Warning: glove does not support emf_poses_rate_divider; "
+                        f"keeping its current stream rate ({exc})",
+                        flush=True,
+                    )
 
             if stream == "hand_skeleton":
                 self._sub = self._device.hand_skeleton().subscribe()

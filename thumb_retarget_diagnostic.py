@@ -57,7 +57,7 @@ def run(args):
         sn=args.glove_sn or None,
         stream=args.stream,
         sdk_log_level="error",
-        emf_rate_divider=1,
+        emf_rate_divider=None,
     )
 
     stopped = False
