@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # RDK side: read both Wuji gloves and send raw keypoints to the host retarget bridge.
-HOST_RETARGET_HOST="${HOST_RETARGET_HOST:-192.168.126.20}"
+HOST_RETARGET_HOST="${HOST_RETARGET_HOST:-10.1.10.166}"
 WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 LEFT_PORT="${LEFT_PORT:-8865}"
 RIGHT_PORT="${RIGHT_PORT:-8866}"

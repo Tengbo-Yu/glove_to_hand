@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
+export ENABLE_HAND2=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 if [[ "${ENABLE_HAND2:-0}" != "1" ]]; then
