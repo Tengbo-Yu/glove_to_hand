@@ -1,4 +1,5 @@
 import argparse
+import os
 import select
 import signal
 import socket
@@ -8,7 +9,15 @@ from collections import defaultdict
 
 import numpy as np
 
+from data_collector_telemetry import (
+    DataCollectorTelemetryPublisher,
+    build_glove_command_payload,
+    default_endpoint,
+    default_source,
+    seconds_to_ns,
+)
 from qpos_protocol import (
+    PROTOCOL_NAME,
     decode_message,
     encode_message,
     make_hello_message,
@@ -120,6 +129,9 @@ def parse_args():
     parser.add_argument("--print-qpos", action="store_true", help="Print every qpos matrix. This can block stdout and add latency.")
     parser.add_argument("--send-timeout", type=float, default=0.0, help="Optional socket send timeout in seconds after connect. Default 0 keeps blocking sends.")
     parser.add_argument("--skip-cached-frames", action="store_true", help="Skip cached glove frames when no fresh SDK frame is available. This can reduce stale commands but may starve the robot if the SDK produces fresh frames slowly.")
+    parser.add_argument("--telemetry", action=argparse.BooleanOptionalAction, default=True, help="Publish glove input telemetry to Hammerhead DataCollector.")
+    parser.add_argument("--telemetry-host", default=os.environ.get("DATA_COLLECTOR_HOST", "127.0.0.1"), help="DataCollector host for the default side-specific endpoint.")
+    parser.add_argument("--telemetry-endpoint", default=None, help="Explicit glove telemetry endpoint; overrides --telemetry-host.")
     return parser.parse_args()
 
 
@@ -138,6 +150,18 @@ def open_socket(host, port, connect_timeout):
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     sock.settimeout(None)
     return sock
+
+
+def create_glove_telemetry_publisher(args):
+    if not args.telemetry:
+        return None
+    source = default_source("glove_command", args.hand)
+    return DataCollectorTelemetryPublisher(
+        endpoint=args.telemetry_endpoint
+        or default_endpoint("glove_command", args.hand, args.telemetry_host),
+        source=source,
+        frame_id=source,
+    )
 
 
 def receive_latency_acks(sock, stop_event, stats, stats_lock):
@@ -217,6 +241,7 @@ def run(args):
     retargeter = pipeline.retargeter if pipeline is not None else None
 
     sock = None
+    telemetry = None
     ack_stop = threading.Event()
     ack_receiver = None
     ack_stats = IntervalStats()
@@ -230,6 +255,9 @@ def run(args):
     previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
 
     try:
+        telemetry = create_glove_telemetry_publisher(args)
+        if telemetry is not None:
+            print(f"Glove telemetry: {telemetry.source} -> {telemetry.endpoint}")
         sock = open_socket(args.host, args.port, args.connect_timeout)
         if args.send_timeout > 0:
             sock.settimeout(args.send_timeout)
@@ -342,15 +370,41 @@ def run(args):
                 }
 
             encode_start = time.perf_counter()
+            frame_timestamp_s = time.time()
             if args.stream_mode == "qpos":
                 message = make_qpos_message(
-                    seq, qpos, time.time(), args.hand, debug=debug_payload
+                    seq, qpos, frame_timestamp_s, args.hand, debug=debug_payload
                 )
             else:
-                message = make_keypoints_message(seq, fingers_pose, time.time(), args.hand, debug=debug_payload)
+                message = make_keypoints_message(
+                    seq, fingers_pose, frame_timestamp_s, args.hand, debug=debug_payload
+                )
             payload = encode_message(message)
             encode_ms = (time.perf_counter() - encode_start) * 1000.0
             stats.add("encode_ms", encode_ms)
+
+            if telemetry is not None:
+                telemetry.publish(
+                    sequence=seq,
+                    source_timestamp_ns=seconds_to_ns(frame_timestamp_s),
+                    payload=build_glove_command_payload(
+                        hand_side=args.hand,
+                        seq=seq,
+                        keypoints=fingers_pose,
+                        stream_mode=args.stream_mode,
+                        retargeted_qpos=qpos,
+                        retarget_config=(
+                            str(pipeline.config_path) if pipeline is not None else None
+                        ),
+                        glove_device_name=args.device_name,
+                        glove_sn=args.glove_sn,
+                        glove_stream=args.glove_stream,
+                        tcp_target=f"{args.host}:{args.port}",
+                        protocol=PROTOCOL_NAME,
+                        cached_frame=not got_fresh_frame,
+                        telemetry_dropped_count=telemetry.dropped_count,
+                    ),
+                )
 
             send_start = time.perf_counter()
             sock.sendall(payload)
@@ -455,6 +509,8 @@ def run(args):
             if ack_receiver is not None:
                 ack_receiver.join(timeout=0.5)
             sock.close()
+        if telemetry is not None:
+            telemetry.close()
         cleanup_input_device(input_device)
         print("Stopped. Glove disconnected and socket closed.")
 

@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # RDK side: read one Wuji glove and send raw keypoints to host1.
 # Current host1 wired address. Override this if DHCP or the teleop network changes.
 HOST_RETARGET_HOST="${HOST_RETARGET_HOST:-10.1.10.166}"
+DATA_COLLECTOR_HOST="${DATA_COLLECTOR_HOST:-$HOST_RETARGET_HOST}"
 WUJI_CONDA_ENV="${WUJI_CONDA_ENV:-wuji_new}"
 
 HAND_SIDE="${HAND_SIDE:-right}"
@@ -24,6 +25,7 @@ WUJI_LOG_LEVEL="${WUJI_LOG_LEVEL:-error}"
 # glove. Keep the device value unless a future firmware explicitly supports it.
 EMF_RATE_DIVIDER="${EMF_RATE_DIVIDER:-0}"
 DEBUG_LATENCY="${DEBUG_LATENCY:-0}"
+DATA_COLLECTOR_TELEMETRY="${DATA_COLLECTOR_TELEMETRY:-1}"
 # The official adapter keeps returning its latest skeleton. Reprocessing that
 # cached frame lets the retarget low-pass converge between lower-rate SDK
 # updates and avoids visible staircase motion at the Hand 2 output.
@@ -58,6 +60,7 @@ CMD=(
   --emf-rate-divider "$EMF_RATE_DIVIDER"
   --wuji-log-level "$WUJI_LOG_LEVEL"
   --stream-mode keypoints
+  --telemetry-host "$DATA_COLLECTOR_HOST"
 )
 
 if [[ -n "$GLOVE_SN" ]]; then
@@ -69,6 +72,10 @@ fi
 if [[ "$SKIP_CACHED_FRAMES" == "1" ]]; then
   CMD+=(--skip-cached-frames)
 fi
+if [[ "$DATA_COLLECTOR_TELEMETRY" != "1" ]]; then
+  CMD+=(--no-telemetry)
+fi
 
 echo "RDK keypoint sender: $HAND_SIDE -> $HOST_RETARGET_HOST:$HOST_RETARGET_PORT"
+echo "DataCollector telemetry: $DATA_COLLECTOR_TELEMETRY host=$DATA_COLLECTOR_HOST"
 "${CMD[@]}"

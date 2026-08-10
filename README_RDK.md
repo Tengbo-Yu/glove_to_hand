@@ -79,6 +79,69 @@ DEBUG_LATENCY=1 HAND_SIDE=right bash teleop_rdk_keypoints.sh
 停止时先在 RDK 端按 `Ctrl-C`；本机命令看门狗会使 Hand 2 失能，再停止
 本机服务。
 
+## Hammerhead DataCollector 采集
+
+`data_collect_hand2` 保持当前 DataCollector `hammerhead` 配置的六路接口：
+
+| 数据边界 | 左手 | 右手 | MCAP topic |
+| --- | ---: | ---: | --- |
+| RDK 手套输入 | 6011 | 6012 | `/wuji/glove/{left,right}/command` |
+| 主机 Hand 2 目标/下发命令 | 6013 | 6014 | `/wuji/hand/{left,right}/command` |
+| Hand 2 实测关节状态 | 6015 | 6016 | `/wuji/hand/{left,right}/state` |
+
+消息使用 DataCollector 的 `[JSON header, msgpack payload]` ZMQ multipart
+格式，并以 `NOBLOCK` 发送；DataCollector 未运行或队列满时只增加
+`telemetry_dropped_count`，不会阻塞手套、retarget 或 Hand 2 控制。
+
+RDK 脚本默认把手套 telemetry 发到 `HOST_RETARGET_HOST`。如果 DataCollector
+在另一台机器，显式设置：
+
+```bash
+DATA_COLLECTOR_HOST=<DataCollector主机IP> \
+HAND_SIDE=right HOST_RETARGET_HOST=10.1.10.166 \
+bash teleop_rdk_keypoints.sh
+```
+
+主机上的 `hand_qpos_server.py` 默认发到 `127.0.0.1`。分离部署时同样用
+`DATA_COLLECTOR_HOST=<IP>` 覆盖。仅调试控制、不采集时，可在脚本前设置
+`DATA_COLLECTOR_TELEMETRY=0`，或对 Python 入口传 `--no-telemetry`。
+
+开始动作前先确认 Hammerhead DataCollector 已监听六个端口：
+
+```bash
+ss -ltnp '( sport >= :6011 and sport <= :6016 )'
+curl -s http://127.0.0.1:8080/api/status
+```
+
+采集后应检查 MCAP 中三类 topic 都有非零消息，而不只检查服务状态。
+`glove` payload 保存 21×3 原始 keypoints；`hand command` 同时保存 retarget
+目标 `received_qpos_5x4` 和本次平滑下发值 `applied_qpos_5x4`；`hand state`
+保存最近的 `actual_qpos_5x4` 以及 `feedback_fresh`。所有 Hand 2 qpos 都明确
+标注 `hand2_device_thumb_to_pinky` 顺序。
+
+手套 topic 的 `source_timestamp_ns` 来自 RDK 系统时钟；hand command/state
+来自运行 server 的主机系统时钟。payload 会标明 clock domain，但不会假定
+RDK 与主机已经同步。未用 PTP/NTP 验证前，不要把跨机时间差当作准确单向延迟。
+
+### MCAP 回放（先 dry-run）
+
+默认从 `/wuji/hand/*/command` 的 `received_qpos_5x4` 回放，并使用当前
+`glove-qpos-v2` 协议；左右 server 默认端口分别是 `8765`、`8767`。
+
+```bash
+python wuji_mcap_replay_client.py \
+  /path/to/episode.mcap --dry-run
+
+# 只向不使能硬件的 server 做 5 秒 TCP 验证
+python hand_qpos_server.py --hand right --port 8767 --no-telemetry
+python wuji_mcap_replay_client.py /path/to/episode.mcap \
+  --duration-sec 5
+```
+
+只有在 dry-run server 已验证帧数、手侧、关节顺序和轨迹范围后，才可清空
+机械手工作空间并另行显式使用 `--enable-hand`。回放工具本身不会绕过 server
+的首帧使能门和命令超时保护。
+
 ## Retargeting 标定
 
 右手默认使用 [config/hand2_right_teleop.yaml](config/hand2_right_teleop.yaml)，

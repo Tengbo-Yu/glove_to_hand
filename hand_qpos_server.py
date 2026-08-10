@@ -1,4 +1,5 @@
 import argparse
+import os
 import signal
 import socket
 import threading
@@ -7,6 +8,15 @@ from collections import defaultdict
 
 import numpy as np
 
+from data_collector_telemetry import (
+    DataCollectorTelemetryPublisher,
+    FINGER_NAMES,
+    JOINT_NAMES,
+    JOINT_ORDER,
+    default_endpoint,
+    default_source,
+    qpos_fields,
+)
 from hand2_backend import WujiHand2Backend
 from qpos_protocol import SocketLineReader, decode_message, encode_message, make_ack_message
 from retargeting_hand2 import Hand2RetargetPipeline
@@ -175,7 +185,153 @@ def parse_args():
     parser.add_argument("--debug-slow-ms", type=float, default=0.0, help="Print slow-frame details above this server processing time in ms. Default derives from --rate.")
     parser.add_argument("--home-on-shutdown", action=argparse.BooleanOptionalAction, default=False, help="Opt-in: move Hand 2 to zero before shutdown.")
     parser.add_argument("--home-duration", type=float, default=1.5, help="Seconds to spend moving to zero position before shutdown.")
+    parser.add_argument("--telemetry", action=argparse.BooleanOptionalAction, default=True, help="Publish Hand 2 command/state telemetry to Hammerhead DataCollector.")
+    parser.add_argument("--hand-command-telemetry", action=argparse.BooleanOptionalAction, default=True, help="Publish accepted and applied Hand 2 commands.")
+    parser.add_argument("--hand-state-telemetry", action=argparse.BooleanOptionalAction, default=True, help="Publish measured Hand 2 joint positions.")
+    parser.add_argument("--telemetry-host", default=os.environ.get("DATA_COLLECTOR_HOST", "127.0.0.1"), help="DataCollector host for side-specific default endpoints.")
+    parser.add_argument("--hand-command-telemetry-endpoint", default=None, help="Explicit command endpoint; overrides --telemetry-host.")
+    parser.add_argument("--hand-state-telemetry-endpoint", default=None, help="Explicit state endpoint; overrides --telemetry-host.")
     return parser.parse_args()
+
+
+def format_peer(peer):
+    if isinstance(peer, tuple) and len(peer) >= 2:
+        return f"{peer[0]}:{peer[1]}"
+    return str(peer)
+
+
+def create_hand_telemetry_publishers(args):
+    # Attribute fallback keeps direct unit calls made with a minimal Namespace
+    # free of network side effects. parse_args() enables telemetry for real CLI use.
+    if not getattr(args, "telemetry", False):
+        return None, None
+
+    command_publisher = None
+    state_publisher = None
+    if getattr(args, "hand_command_telemetry", True):
+        source = default_source("hand_command", args.hand)
+        command_publisher = DataCollectorTelemetryPublisher(
+            endpoint=getattr(args, "hand_command_telemetry_endpoint", None)
+            or default_endpoint("hand_command", args.hand, args.telemetry_host),
+            source=source,
+            frame_id=source,
+        )
+    if getattr(args, "hand_state_telemetry", True):
+        source = default_source("hand_state", args.hand)
+        state_publisher = DataCollectorTelemetryPublisher(
+            endpoint=getattr(args, "hand_state_telemetry_endpoint", None)
+            or default_endpoint("hand_state", args.hand, args.telemetry_host),
+            source=source,
+            frame_id=source,
+        )
+    return command_publisher, state_publisher
+
+
+def build_hand_command_payload(
+    *,
+    hand_side,
+    message,
+    target_qpos,
+    applied_qpos,
+    peer,
+    dropped_socket,
+    dropped_socket_total,
+    seq_gap,
+    enable_hand,
+    applied_to_hand,
+    apply_timestamp_ns,
+    server_command_timestamp_ns,
+    retarget_config,
+    telemetry_dropped_count,
+):
+    payload = {
+        "schema": "wuji_hand_command.hand2.v2",
+        "hand_model": "WujiHand2",
+        "hand_side": hand_side,
+        "glove_seq": int(message["seq"]),
+        "glove_timestamp": float(message["timestamp"]),
+        "glove_clock": "rdk_system_time",
+        "source_clock": "hand_server_system_time",
+        "clock_sync_assumed": False,
+        "input_type": message["type"],
+        "retarget_location": (
+            "hand_server" if message["type"] == "keypoints_frame" else "rdk"
+        ),
+        "retarget_config": str(retarget_config),
+        "finger_names": FINGER_NAMES,
+        "joint_names": JOINT_NAMES,
+        "joint_order": JOINT_ORDER,
+        "tcp_peer": format_peer(peer),
+        "dropped_socket": int(dropped_socket),
+        "dropped_socket_total": int(dropped_socket_total),
+        "seq_gap": int(seq_gap),
+        "enable_hand": bool(enable_hand),
+        "applied_to_controller": bool(applied_to_hand),
+        "applied_to_hand": bool(applied_to_hand),
+        "apply_timestamp_ns": apply_timestamp_ns,
+        "server_command_timestamp_ns": int(server_command_timestamp_ns),
+        "telemetry_dropped_count": int(telemetry_dropped_count),
+        "applied_qpos_5x4": None,
+        "applied_qpos_flat20": None,
+    }
+    # Preserve the old data_collect field used by the replay client. For Hand 2
+    # keypoint mode this is the server-retargeted target in verified device order.
+    payload.update(qpos_fields("received_qpos", target_qpos))
+    payload.update(qpos_fields("target_qpos", target_qpos))
+    if applied_qpos is not None:
+        payload.update(qpos_fields("applied_qpos", applied_qpos))
+    if message["type"] == "keypoints_frame":
+        payload["glove_keypoints_21x3"] = np.asarray(
+            message["keypoints"], dtype=np.float64
+        ).tolist()
+    return payload
+
+
+def build_hand_state_payload(
+    *,
+    hand_side,
+    target_qpos,
+    applied_qpos,
+    actual_qpos,
+    actual_timestamp_ns,
+    feedback_fresh,
+    hand_serial,
+    kp,
+    kd,
+    current_limit,
+    enable_hand,
+    telemetry_dropped_count,
+):
+    payload = {
+        "schema": "wuji_hand_state.hand2.v2",
+        "hand_model": "WujiHand2",
+        "hand_side": hand_side,
+        "finger_names": FINGER_NAMES,
+        "joint_names": JOINT_NAMES,
+        "joint_order": JOINT_ORDER,
+        "hand_serial": hand_serial,
+        "kp": float(kp),
+        "kd": float(kd),
+        "current_limit": float(current_limit),
+        "enable_hand": bool(enable_hand),
+        "state_available": actual_qpos is not None,
+        "feedback_fresh": bool(feedback_fresh),
+        "actual_timestamp_ns": actual_timestamp_ns,
+        "source_clock": "hand_server_system_time",
+        "read_error": None if actual_qpos is not None else "feedback_not_available",
+        "effort_supported": False,
+        "actual_qpos_5x4": None,
+        "actual_qpos_flat20": None,
+        "actual_effort_5x4": None,
+        "actual_effort_flat20": None,
+        "telemetry_dropped_count": int(telemetry_dropped_count),
+    }
+    payload.update(qpos_fields("target_qpos", target_qpos))
+    if applied_qpos is not None:
+        payload.update(qpos_fields("applied_qpos", applied_qpos))
+    if actual_qpos is not None:
+        payload.update(qpos_fields("actual_qpos", actual_qpos))
+    return payload
 
 
 def read_latest_qpos(reader, metrics=None, expected_hand=None):
@@ -239,6 +395,8 @@ def serve_connection(conn, peer, args, stop_requested):
     reader = SocketLineReader(conn)
 
     backend = None
+    command_telemetry = None
+    state_telemetry = None
     receiver_stop = threading.Event()
     receiver_done = threading.Event()
     receiver_state = {
@@ -288,6 +446,18 @@ def serve_connection(conn, peer, args, stop_requested):
     receiver = threading.Thread(target=receiver_loop, name="qpos-receiver", daemon=True)
 
     try:
+        command_telemetry, state_telemetry = create_hand_telemetry_publishers(args)
+        if command_telemetry is not None:
+            print(
+                f"Hand command telemetry: {command_telemetry.source} "
+                f"-> {command_telemetry.endpoint}"
+            )
+        if state_telemetry is not None:
+            print(
+                f"Hand state telemetry: {state_telemetry.source} "
+                f"-> {state_telemetry.endpoint}"
+            )
+
         # Validate the Hand 2 model and URDF->device order before any enable call.
         pipeline = Hand2RetargetPipeline(args.config, args.hand)
         retargeter = pipeline.retargeter
@@ -385,7 +555,10 @@ def serve_connection(conn, peer, args, stop_requested):
         last_seq = None
         last_valid_frame_time = time.monotonic()
         received = 0
+        dropped_socket_total = 0
         last_qpos = None
+        latest_feedback = None
+        latest_feedback_timestamp_ns = None
         smoother = QposSmoother(
             tau=args.smooth_tau,
             max_velocity=args.max_joint_velocity,
@@ -394,6 +567,8 @@ def serve_connection(conn, peer, args, stop_requested):
         if backend is not None:
             measured_qpos = backend.current_positions().reshape(5, 4)
             smoother.initialize(measured_qpos)
+            latest_feedback = measured_qpos.copy()
+            latest_feedback_timestamp_ns = time.time_ns()
             print(
                 "Output initialized from measured Hand 2 joint positions; "
                 "the first teleop frame will be rate-limited."
@@ -433,6 +608,8 @@ def serve_connection(conn, peer, args, stop_requested):
             wire_age_ms = 0.0
             server_queue_ms = 0.0
             seq_gap = 0
+            target_message = None
+            target_dropped_socket = 0
             if message is not None and version != last_version:
                 frame_start = time.perf_counter()
                 if received_perf is not None:
@@ -446,6 +623,7 @@ def serve_connection(conn, peer, args, stop_requested):
                 seq = message["seq"]
                 seq_gap = 0 if last_seq is None else max(0, seq - last_seq - 1)
                 last_seq = seq
+                dropped_socket_total += dropped
                 wire_age_ms = (time.time() - message["timestamp"]) * 1000.0
                 stats.add("wire_age_ms", wire_age_ms)
                 stats.inc("seq_gap", seq_gap)
@@ -468,6 +646,8 @@ def serve_connection(conn, peer, args, stop_requested):
                     new_target = True
                 if new_target:
                     smoother.set_target(last_qpos)
+                    target_message = message
+                    target_dropped_socket = dropped
                 stats.add("retarget_ms", retarget_ms)
                 frame_ms = (time.perf_counter() - frame_start) * 1000.0
                 stats.add("server_frame_ms", frame_ms)
@@ -508,6 +688,7 @@ def serve_connection(conn, peer, args, stop_requested):
 
             command_qpos = smoother.step(dt)
             hand_write_ms = 0.0
+            hand_apply_timestamp_ns = None
             if (
                 backend is not None
                 and args.command_timeout > 0
@@ -520,12 +701,71 @@ def serve_connection(conn, peer, args, stop_requested):
             if command_qpos is not None and backend is not None:
                 hand_start = time.perf_counter()
                 backend.send(command_qpos.reshape(-1))
+                hand_apply_timestamp_ns = time.time_ns()
                 hand_write_ms = (time.perf_counter() - hand_start) * 1000.0
                 if args.debug_latency:
                     stats.add("thumb_j4_target", command_qpos[0, 3])
-                    feedback = backend.latest_positions()
-                    if feedback is not None:
-                        stats.add("thumb_j4_feedback", feedback[3])
+            feedback_fresh = False
+            if target_message is not None and backend is not None:
+                feedback = backend.latest_positions()
+                if feedback is not None:
+                    latest_feedback = feedback.reshape(5, 4)
+                    latest_feedback_timestamp_ns = time.time_ns()
+                    feedback_fresh = True
+                    if args.debug_latency:
+                        stats.add("thumb_j4_feedback", latest_feedback[0, 3])
+
+            if target_message is not None:
+                server_command_timestamp_ns = hand_apply_timestamp_ns or time.time_ns()
+                apply_timestamp_ns = hand_apply_timestamp_ns
+                if command_telemetry is not None:
+                    command_telemetry.publish(
+                        sequence=target_message["seq"],
+                        source_timestamp_ns=server_command_timestamp_ns,
+                        payload=build_hand_command_payload(
+                            hand_side=args.hand,
+                            message=target_message,
+                            target_qpos=last_qpos,
+                            applied_qpos=command_qpos,
+                            peer=peer,
+                            dropped_socket=target_dropped_socket,
+                            dropped_socket_total=dropped_socket_total,
+                            seq_gap=seq_gap,
+                            enable_hand=args.enable_hand,
+                            applied_to_hand=backend is not None and command_qpos is not None,
+                            apply_timestamp_ns=apply_timestamp_ns,
+                            server_command_timestamp_ns=server_command_timestamp_ns,
+                            retarget_config=pipeline.config_path,
+                            telemetry_dropped_count=command_telemetry.dropped_count,
+                        ),
+                    )
+                if state_telemetry is not None:
+                    state_timestamp_ns = (
+                        latest_feedback_timestamp_ns
+                        or apply_timestamp_ns
+                        or server_command_timestamp_ns
+                    )
+                    hand_serial = (
+                        backend.serial_number if backend is not None else args.hand_sn
+                    )
+                    state_telemetry.publish(
+                        sequence=target_message["seq"],
+                        source_timestamp_ns=state_timestamp_ns,
+                        payload=build_hand_state_payload(
+                            hand_side=args.hand,
+                            target_qpos=last_qpos,
+                            applied_qpos=command_qpos,
+                            actual_qpos=latest_feedback,
+                            actual_timestamp_ns=latest_feedback_timestamp_ns,
+                            feedback_fresh=feedback_fresh,
+                            hand_serial=hand_serial,
+                            kp=args.kp,
+                            kd=args.kd,
+                            current_limit=args.current_limit,
+                            enable_hand=args.enable_hand,
+                            telemetry_dropped_count=state_telemetry.dropped_count,
+                        ),
+                    )
             stats.add("hand_write_ms", hand_write_ms)
             stats.inc("control_ticks")
 
@@ -585,6 +825,10 @@ def serve_connection(conn, peer, args, stop_requested):
                 except Exception as exc:
                     print(f"Shutdown homing skipped: {exc}")
             backend.close()
+        if command_telemetry is not None:
+            command_telemetry.close()
+        if state_telemetry is not None:
+            state_telemetry.close()
         try:
             conn.shutdown(socket.SHUT_RDWR)
         except OSError:

@@ -16,6 +16,9 @@ mujoco>=3.6
 avp_stream
 mediapipe
 opencv-python
+msgpack>=1.0
+pyzmq>=25
+mcap>=1.2
 
 # Use the checked-out v2026.8.3 implementation and Hand 2 configs.
 -e ./wuji-retargeting

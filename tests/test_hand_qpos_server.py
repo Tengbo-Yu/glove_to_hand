@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 import numpy as np
 
-from hand_qpos_server import QposSmoother, read_latest_qpos, serve_connection
+from hand_qpos_server import (
+    QposSmoother,
+    build_hand_command_payload,
+    build_hand_state_payload,
+    read_latest_qpos,
+    serve_connection,
+)
 from qpos_protocol import (
     SocketLineReader,
     decode_message,
@@ -34,6 +40,58 @@ class QposSmootherTest(unittest.TestCase):
         smoother = QposSmoother()
         with self.assertRaisesRegex(ValueError, "shape"):
             smoother.initialize(np.zeros(20, dtype=np.float64))
+
+
+class Hand2TelemetryPayloadTest(unittest.TestCase):
+    def test_command_preserves_replay_field_and_applied_command(self):
+        target = np.arange(20, dtype=np.float64).reshape(5, 4)
+        applied = target / 2
+        message = make_keypoints_message(
+            17, np.ones((21, 3)), 123.5, "right"
+        )
+        payload = build_hand_command_payload(
+            hand_side="right",
+            message=message,
+            target_qpos=target,
+            applied_qpos=applied,
+            peer=("10.1.10.20", 4567),
+            dropped_socket=2,
+            dropped_socket_total=5,
+            seq_gap=1,
+            enable_hand=True,
+            applied_to_hand=True,
+            apply_timestamp_ns=999,
+            server_command_timestamp_ns=998,
+            retarget_config="hand2.yaml",
+            telemetry_dropped_count=0,
+        )
+        self.assertEqual(payload["schema"], "wuji_hand_command.hand2.v2")
+        self.assertEqual(payload["received_qpos_5x4"], target.tolist())
+        self.assertEqual(payload["applied_qpos_5x4"], applied.tolist())
+        self.assertEqual(payload["glove_keypoints_21x3"], message["keypoints"])
+        self.assertEqual(payload["joint_order"], "hand2_device_thumb_to_pinky")
+        self.assertEqual(payload["server_command_timestamp_ns"], 998)
+
+    def test_state_reports_retained_feedback_freshness(self):
+        qpos = np.zeros((5, 4), dtype=np.float64)
+        payload = build_hand_state_payload(
+            hand_side="left",
+            target_qpos=qpos,
+            applied_qpos=qpos,
+            actual_qpos=qpos,
+            actual_timestamp_ns=123,
+            feedback_fresh=False,
+            hand_serial="WH2J",
+            kp=3.5,
+            kd=0.1,
+            current_limit=1.5,
+            enable_hand=True,
+            telemetry_dropped_count=0,
+        )
+        self.assertTrue(payload["state_available"])
+        self.assertFalse(payload["feedback_fresh"])
+        self.assertEqual(payload["actual_qpos_flat20"], [0.0] * 20)
+        self.assertFalse(payload["effort_supported"])
 
 
 class EnableGateTest(unittest.TestCase):
