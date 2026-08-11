@@ -1,6 +1,13 @@
 # Glove 连接 RDK_X5
 
 ```
+Host sunrise
+    HostName 10.1.11.231
+    User sunrise
+PWD sunrise
+```
+
+```
 RDK_X5 运行
   sudo ip addr add 192.168.1.20/24 dev eth0
   sudo ip route replace 192.168.1.100/32 dev eth0 src 192.168.1.20
