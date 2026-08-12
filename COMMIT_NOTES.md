@@ -4,6 +4,62 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-08-12 - Wait for the Unitree management address at boot
+
+Base and branch:
+- Branch: `data_collect_hand2`.
+- Base: `1242320` (`fix: preserve Unitree management IP in Hand2 service`).
+- Reboot-under-test boot ID: `17463a66-2a5f-49a5-84fa-4e99ee40bfb9`.
+
+Suggested commit message:
+`fix: wait for Unitree management address at boot`
+
+Incident and root cause:
+- The management-safe helper ran at `22:40:03`, 18 seconds after boot, while
+  `192.168.123.164/24` was still absent. It correctly failed closed, leaving
+  management networking untouched, but the left/right service jobs failed with
+  their required network dependency.
+- `192.168.123.164/24` appeared later even though `network-online.target` had
+  already allowed the Hand2 unit to start. The target remained reachable after
+  the operator host's direct route was restored.
+
+Changed files:
+- `configure_hand2_network.sh` now waits up to 60 seconds for the exact
+  management CIDR before failing closed. The wait duration is bounded and can
+  be overridden with `HAND2_MANAGEMENT_WAIT_SECONDS`.
+- `wuji-hand2-network.service` sets `TimeoutStartSec=75`, allowing the bounded
+  wait to finish while dependent hand service jobs remain queued.
+- README and SOP document the observed boot ordering, wait behavior, and
+  remaining reboot acceptance.
+
+Live recovery and safety:
+- Once `.164/24` existed, the failed units were reset and started normally.
+  All three became active, `.100/32` was added without modifying `.164/24`, and
+  `8765`/`8767` listened again.
+- No command client or valid Hand2 qpos was sent; no motion was requested.
+
+Verification:
+- `bash -n` and `git diff --check` passed.
+- An isolated network namespace added `.164/24` two seconds after helper start;
+  the helper waited, then added `.100/32` and both exact routes. Stop removed
+  only its own objects and preserved `.164/24` (`DELAYED_ADDRESS_TEST_OK`).
+- Invalid wait configuration exited 2; a missing management CIDR with a zero
+  wait exited 1 without network mutation.
+- The exact helper/unit were installed on the target. Repository and target
+  SHA-256 values matched: helper `27692c2c...e234`, unit
+  `6b5017b9...a0014c8`.
+- A live two-second missing-CIDR test exited 1 after the bounded wait while both
+  real addresses stayed intact. A full stop/start cycle preserved `.164`,
+  restored `.100` and both routes, reached each Hand2 for 3/3 probes, and left
+  all three enabled units active with `NRestarts=0` and ports `8765`/`8767`
+  listening.
+- `systemd-analyze verify` found no Hand2 unit error; it printed only existing
+  unrelated service/varlink warnings. Staged diff review remains required
+  immediately before commit.
+
+Known limitation:
+- The bounded-wait version has not yet been validated by another real reboot.
+
 ## 2026-08-12 - Preserve Unitree management IP during Hand2 startup
 
 Base and branch:

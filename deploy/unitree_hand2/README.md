@@ -10,8 +10,9 @@ Target-specific deployment for `unitree@192.168.123.164`.
 - `wuji-hand2-network.service` first requires the normal management address
   `192.168.123.164/24` to exist on `eth0`, then adds `192.168.1.100/32` and
   direct `/32` routes only for the factory Hand2 addresses `.110` and `.111`.
-  It fails closed if the management address is absent and never replaces or
-  removes that address.
+  It allows up to 60 seconds for the management address to appear after boot,
+  then fails closed if it is still absent. It never replaces or removes that
+  address.
 - `wuji-hand2@left.service` listens on TCP `8765`.
 - `wuji-hand2@right.service` listens on TCP `8767`.
 - Both services use the offline ARM64 image named in `/etc/default/wuji-hand2`.

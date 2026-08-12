@@ -37,8 +37,8 @@ DataCollector 实流验收也仍待完成。
 `192.168.1.0/24 via 192.168.123.233`，因此服务只给 `eth0` 增加
 `192.168.1.100/32`，并为 `.110`、`.111` 增加两条更具体的直连 `/32` 路由；
 原有路由不被覆盖。启动脚本会先确认管理地址 `192.168.123.164/24` 已由
-NetworkManager 配置好；管理地址缺失时直接失败，绝不会用 `ip address replace`
-覆盖管理地址。只有该直连方案确认不可用时，才按 Wuji 文档的
+NetworkManager 配置好；开机时最多等待 60 秒，超时后保持 fail-closed，绝不会
+用 `ip address replace` 覆盖管理地址。只有该直连方案确认不可用时，才按 Wuji 文档的
 [`IPSet/Get`](https://docs.wuji.tech/docs/zh/wuji-hand/latest/sdk-reference/#215-ipsetget)
 流程修改设备 IP，并同步修改 env、路由和本文映射。
 
@@ -149,6 +149,7 @@ ping -I 192.168.1.100 -c 20 192.168.1.111
 
 验收必须同时看到 `192.168.123.164/24` 和 `192.168.1.100/32`。如果脚本打印
 `Refusing Hand2 network setup`，先修复机器人原生管理网络；不要手工替换地址。
+systemd 单元允许脚本最多等待 60 秒，并设置 `TimeoutStartSec=75`。
 
 在镜像中扫描；这一步只发现设备，不使能：
 
@@ -366,6 +367,14 @@ sudo ip link set eth0 up
 若提示 `RTNETLINK answers: File exists`，说明该地址已经存在，不要 flush 网卡。
 恢复 SSH 后安装新版网络脚本和 unit，再按第 7 节验收。
 
+### 10.2 管理地址晚于 network-online 出现
+
+boot ID `17463a66-2a5f-49a5-84fa-4e99ee40bfb9` 的重启验收发现：系统在
+`22:40:03` 启动 Hand2 网络 unit 时 `.164/24` 尚未出现，安全门禁因此拒绝启动；
+随后 NetworkManager 才配置好 `.164/24`。机器人管理网络没有丢失，但左右 Hand2
+服务因依赖失败保持 inactive。新版脚本会等待该精确管理地址最多 60 秒，使左右
+服务的启动 job 继续等待网络依赖；超过 60 秒仍缺失才安全失败。
+
 ## 11. 2026-08-12 实测记录
 
 - 目标：Ubuntu 20.04 ARM64，kernel `5.10.104-tegra`；首次部署 boot ID
@@ -383,5 +392,8 @@ sudo ip link set eth0 up
   正常监听；hello-only 后两侧均为 `Ready 20/20`，没有关节进入 Enabled。
 - 旧网络 unit 在目标重启后复现管理地址丢失；新版脚本已完成 fail-closed、
   start/stop 和“仅启动左右服务自动拉起网络依赖”的冷启动等价测试，`.164`
-  持续可达。修复后的 unit 尚未做第二次真实重启验收。
+  持续可达。
+- 第二次真实重启 boot ID `17463a66-2a5f-49a5-84fa-4e99ee40bfb9` 证明 `.164`
+  不再被覆盖，但暴露 `.164` 晚于 `network-online.target` 出现的时序；已加入 60 秒
+  有界等待。包含等待逻辑的版本尚未做第三次真实重启验收。
 - 尚未进行 RDK 真动作和 DataCollector 实流验收。
