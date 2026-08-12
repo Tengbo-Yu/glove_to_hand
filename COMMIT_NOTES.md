@@ -4,6 +4,125 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-08-12 - Deploy dual Hand2 services on Unitree
+
+Base and branch:
+- Branch: `data_collect_hand2`.
+- Deployment code base: `7abfcdb` before this commit.
+- Target: `unitree@192.168.123.164`, Ubuntu 20.04 ARM64, kernel
+  `5.10.104-tegra`.
+
+Suggested commit message:
+`feat: deploy dual Hand2 services on Unitree`
+
+Purpose:
+- Package this repository as an offline ARM64 container and run one persistent,
+  safety-gated command service for each Wuji Hand2 connected to the Unitree.
+- Preserve the target's pre-existing `192.168.1.0/24 via 192.168.123.233`
+  route. Reach the factory-addressed hands without changing their persistent IPs
+  by adding only `192.168.1.100/32` and direct `.110`/`.111` host routes.
+- Make the real-machine deployment reproducible with an operator SOP covering
+  preparation, read-only gates, install, acceptance, motion handoff, shutdown,
+  evidence capture, and exact rollback.
+
+Changed files:
+- `deploy/unitree_hand2/Dockerfile`: builds on the ARM64 Jammy image already on
+  the target, installs a pinned offline wheelhouse, imports all native runtime
+  modules during build, and copies the exact Hand2 model assets into the
+  vendored retarget package.
+- `deploy/unitree_hand2/requirements-runtime-arm64.txt`: pins the 33 Python
+  3.10/AArch64 wheels used by the deployed runtime, including Wuji SDK
+  `2026.8.3`, NumPy `2.2.6`, Pinocchio `3.8.0`, NLopt `2.11.0`, MuJoCo `3.6.0`,
+  and the compatible `cmeel-octomap 1.10.0`.
+- `deploy/unitree_hand2/prepare_model_assets.sh`: fetches only the Hand2 URDF,
+  MJCF and meshes from official `wuji-description` commit
+  `7d547ad50ca8cff92d999ae2cc01fc69bcb7c2b6`, verifies critical files, and
+  records the source commit in the build context.
+- `deploy/unitree_hand2/wuji-hand2-network.service`: adds and removes the
+  dedicated `eth0` address plus exact direct routes for `.110` and `.111`,
+  without touching unrelated network configuration.
+- `deploy/unitree_hand2/wuji-hand2@.service`: defines boot-enabled left/right
+  Docker services, image preflight, network ordering, clean container stop, and
+  failure restart.
+- `deploy/unitree_hand2/run_hand2_container.sh`: maps each instance to the exact
+  SN/port, rejects hardware mode unless `ENABLE_HAND2=1`, passes the control,
+  slew, watchdog, stiffness and current limits, and runs without a persistent
+  writable home directory.
+- `deploy/unitree_hand2/wuji-hand2.env` and `.env.example`: record the validated
+  production mapping and a fail-closed template. Live mapping is left
+  `WH2JA01260717002 @ 192.168.1.110:7447 -> 8765`, right
+  `WH2KA01260730030 @ 192.168.1.111:7447 -> 8767`.
+- `deploy/unitree_hand2/install_services.sh`: validates the image, installs
+  exact launcher/env/unit files, reloads systemd, and enables but deliberately
+  does not start the services before read-only acceptance.
+- `deploy/unitree_hand2/README.md`: summarizes the deployed topology, main
+  operating commands, safety boundary, and offline inputs.
+- `deploy/unitree_hand2/UNITREE_HAND2_SERVICE_SOP.md`: adds the copy-ready
+  Chinese SOP, including offline wheel/model preparation, image build, SDK scan,
+  read-only diagnostics, systemd acceptance, hello-only proof, optional first
+  motion protocol, normal shutdown, DataCollector boundary, and exact rollback.
+
+Runtime and safety behavior:
+- The target uses image `codex/glove-to-hand-hand2:7abfcdb`; the retained build
+  directory is `/home/unitree/hand2-build.VQHyht` and deployment evidence is in
+  `/var/backups/wuji-hand2/install_20260812_211314`.
+- `wuji-hand2-network.service`, `wuji-hand2@left.service`, and
+  `wuji-hand2@right.service` are installed, enabled, and active. The hand
+  services listen on TCP `8765`/`8767` and reported `NRestarts=0` at acceptance.
+- Control is `200 Hz`, `smooth_tau=0.02 s`, maximum joint velocity `6 rad/s`,
+  command timeout `1 s`, `KP=3.5`, `KD=0.1`, and current limit `1.5 A`.
+- A service process does not connect/enable its Hand2 until a valid, non-zero,
+  side-matched qpos frame arrives. A hello-only client leaves the device
+  disabled, and the command watchdog disables it when fresh commands stop.
+- Telemetry remains best-effort and non-blocking. The configured collector is
+  `192.168.123.222`; its current unavailability does not block control.
+
+Deployment problems resolved:
+- The Ubuntu 20.04 host has glibc 2.31, below the current SDK wheel requirement;
+  the runtime is therefore isolated in the existing Jammy/glibc 2.35 image.
+- The first native import exposed an OctoMap ABI mismatch; pinning
+  `cmeel-octomap==1.10.0` made Pinocchio/Coal imports consistent.
+- The vendored retarget repository does not contain its model submodule assets;
+  the build now injects the exact official model commit, including MuJoCo mesh
+  dependencies, before retarget initialization is tested.
+
+Verification:
+- Wuji SDK scan discovered left `WH2JA01260717002` at
+  `192.168.1.110:7447` and right `WH2KA01260730030` at
+  `192.168.1.111:7447`; both reported firmware `2.2.3`, correct handedness,
+  `20/20` joints online, and no current joint errors.
+- Read-only diagnostics measured left `52.1..60.1 C`, `12.04..12.15 V` and
+  right `53.2..61.5 C`, `12.00..12.20 V`.
+- Twenty ICMP probes per hand had `0%` loss; average RTT was approximately
+  `0.514 ms` left and `0.370 ms` right.
+- Both TCP listeners, both containers, all three active/enabled units, image
+  identity, routes, and `NRestarts=0` were checked on the live target.
+- A hello-only client initialized each retarget configuration without sending
+  qpos. Logs stated the hand remained disabled; subsequent read-only diagnostics
+  showed `Ready 20/20` on both sides and no Enabled joints.
+- In the deployed image,
+  `tests.test_hand2_adaptation`, `tests.test_data_collector_telemetry`, and
+  `tests.test_hand_qpos_server` ran `29 tests` in `1.297 s`, all passed during
+  the final live read-only recheck.
+- `systemd-analyze verify` accepted both deployed Hand2 units. It emitted only
+  pre-existing executable-bit warnings for unrelated `key_server.service` and
+  `chrony.service`.
+- `bash -n deploy/unitree_hand2/*.sh`: passed.
+- `git diff --check`: passed before staging; the staged diff is checked again
+  immediately before commit.
+
+Known limitations:
+- No valid glove qpos was sent and no Hand2 motion occurred. Side selection,
+  physical joint direction/range, live slew behavior, and the `1 s` disable
+  watchdog still require the supervised first-motion procedure in the SOP.
+- `192.168.123.222` did not answer ping and TCP `6013-6016` were not open, so
+  DataCollector stream growth and `malformed_count=0` remain unverified.
+- The target was not rebooted after enablement; boot-time service ordering still
+  needs a controlled reboot acceptance window.
+- The focused 29-test run did not include the MCAP replay suite. Local broader
+  tests had environment-only import gaps; the target image resolved the native
+  Hand2 imports used by the running service.
+
 ## 2026-08-10 - Adapt Hand 2 telemetry to Hammerhead DataCollector
 
 Base and branch:

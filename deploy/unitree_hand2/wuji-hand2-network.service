@@ -1,0 +1,18 @@
+[Unit]
+Description=Wuji Hand2 direct host routes
+Wants=network-online.target
+After=network-online.target
+Before=wuji-hand2@left.service wuji-hand2@right.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip address replace 192.168.1.100/32 dev eth0
+ExecStart=/usr/sbin/ip route replace 192.168.1.110/32 dev eth0 src 192.168.1.100
+ExecStart=/usr/sbin/ip route replace 192.168.1.111/32 dev eth0 src 192.168.1.100
+ExecStop=-/usr/sbin/ip route del 192.168.1.111/32 dev eth0
+ExecStop=-/usr/sbin/ip route del 192.168.1.110/32 dev eth0
+ExecStop=-/usr/sbin/ip address del 192.168.1.100/32 dev eth0
+
+[Install]
+WantedBy=multi-user.target
