@@ -36,7 +36,9 @@ DataCollector 实流验收也仍待完成。
 本次**不需要修改 Hand2 IP**。目标机原有
 `192.168.1.0/24 via 192.168.123.233`，因此服务只给 `eth0` 增加
 `192.168.1.100/32`，并为 `.110`、`.111` 增加两条更具体的直连 `/32` 路由；
-原有路由不被覆盖。只有该直连方案确认不可用时，才按 Wuji 文档的
+原有路由不被覆盖。启动脚本会先确认管理地址 `192.168.123.164/24` 已由
+NetworkManager 配置好；管理地址缺失时直接失败，绝不会用 `ip address replace`
+覆盖管理地址。只有该直连方案确认不可用时，才按 Wuji 文档的
 [`IPSet/Get`](https://docs.wuji.tech/docs/zh/wuji-hand/latest/sdk-reference/#215-ipsetget)
 流程修改设备 IP，并同步修改 env、路由和本文映射。
 
@@ -133,17 +135,20 @@ sudo docker run --rm --network none \
 
 ## 5. 网络与只读 Hand2 验收
 
-先临时添加与 systemd 单元相同的网络配置：
+先确认管理地址存在，再使用与 systemd 单元相同的安全脚本添加 Hand2 网络配置：
 
 ```bash
-sudo ip address replace 192.168.1.100/32 dev eth0
-sudo ip route replace 192.168.1.110/32 dev eth0 src 192.168.1.100
-sudo ip route replace 192.168.1.111/32 dev eth0 src 192.168.1.100
+ip -4 -o address show dev eth0 | grep -F ' inet 192.168.123.164/24 '
+sudo deploy/unitree_hand2/configure_hand2_network.sh start
+ip -br -4 address show dev eth0
 ip route get 192.168.1.110
 ip route get 192.168.1.111
 ping -I 192.168.1.100 -c 20 192.168.1.110
 ping -I 192.168.1.100 -c 20 192.168.1.111
 ```
+
+验收必须同时看到 `192.168.123.164/24` 和 `192.168.1.100/32`。如果脚本打印
+`Refusing Hand2 network setup`，先修复机器人原生管理网络；不要手工替换地址。
 
 在镜像中扫描；这一步只发现设备，不使能：
 
@@ -175,7 +180,8 @@ sudo docker run --rm --network host --user 1000:1000 --env HOME=/tmp \
 `200 Hz`、平滑 `0.02 s`、最大关节速度 `6 rad/s`、看门狗 `1 s`、
 `KP=3.5`、`KD=0.1`、电流限制 `1.5 A`。
 
-安装脚本会复制精确文件并 `enable` 三个单元，但不会自行启动：
+安装脚本会复制网络配置脚本、容器启动脚本和精确 unit/env 文件，并 `enable`
+三个单元，但不会自行启动：
 
 ```bash
 cd /home/unitree/hand2-build/app
@@ -207,7 +213,8 @@ ip route show 192.168.1.111/32
 ```
 
 通过门槛：三个单元均 `enabled`/`active`；左右容器各一个；8765、8767 各只有
-一个监听者；`NRestarts=0`；两条路由均以 `src 192.168.1.100` 直连 `eth0`。
+一个监听者；`NRestarts=0`；`192.168.123.164/24` 仍存在；两条路由均以
+`src 192.168.1.100` 直连 `eth0`。
 
 ### 7.2 hello-only 安全探针
 
@@ -331,6 +338,7 @@ sudo rm /etc/systemd/system/wuji-hand2@.service
 sudo rm /etc/systemd/system/wuji-hand2-network.service
 sudo rm /etc/default/wuji-hand2
 sudo rm /opt/glove_to_hand/deploy/unitree_hand2/run_hand2_container.sh
+sudo rm /opt/glove_to_hand/deploy/unitree_hand2/configure_hand2_network.sh
 sudo systemctl daemon-reload
 sudo systemctl reset-failed
 ```
@@ -339,10 +347,30 @@ sudo systemctl reset-failed
 `192.168.1.100/32` 地址，不会删除原有经 `192.168.123.233` 的 `/24` 路由。
 镜像和构建目录先保留用于复盘，确认不再需要后再单独清理。
 
+### 10.1 管理地址异常恢复
+
+2026-08-12 首版 unit 使用了
+`ip address replace 192.168.1.100/32 dev eth0`。机器人重启后，该命令把
+`192.168.123.164/24` 替换掉，且 `/32` 地址没有到操作主机的回程路由，造成
+`.164` 与 `.100` 都无法远程登录。新版脚本已移除该命令并增加管理地址门禁。
+
+如果旧 unit 已导致失联，应优先从机器人本地终端恢复；只操作以下精确对象：
+
+```bash
+sudo systemctl disable --now wuji-hand2@left.service wuji-hand2@right.service
+sudo systemctl disable --now wuji-hand2-network.service
+sudo ip address add 192.168.123.164/24 dev eth0
+sudo ip link set eth0 up
+```
+
+若提示 `RTNETLINK answers: File exists`，说明该地址已经存在，不要 flush 网卡。
+恢复 SSH 后安装新版网络脚本和 unit，再按第 7 节验收。
+
 ## 11. 2026-08-12 实测记录
 
-- 目标：Ubuntu 20.04 ARM64，kernel `5.10.104-tegra`；boot ID
-  `6d7aae41-49cb-4a82-9c71-eb2080575366`。
+- 目标：Ubuntu 20.04 ARM64，kernel `5.10.104-tegra`；首次部署 boot ID
+  `6d7aae41-49cb-4a82-9c71-eb2080575366`，故障恢复后的 boot ID
+  `47a13edf-1f2c-4819-a810-8b93a234b4aa`。
 - 镜像：`codex/glove-to-hand-hand2:7abfcdb`，约 `1.02 GB`；目标构建目录
   `/home/unitree/hand2-build.VQHyht`。
 - 左手：固件 `2.2.3`，`20/20` online，无当前错误，温度
@@ -353,4 +381,7 @@ sudo systemctl reset-failed
   `0.370 ms`。
 - 三个 systemd 单元已 enabled/active；左右服务 `NRestarts=0`，8765/8767
   正常监听；hello-only 后两侧均为 `Ready 20/20`，没有关节进入 Enabled。
-- 尚未重启目标机验证开机自启；尚未进行 RDK 真动作和 DataCollector 实流验收。
+- 旧网络 unit 在目标重启后复现管理地址丢失；新版脚本已完成 fail-closed、
+  start/stop 和“仅启动左右服务自动拉起网络依赖”的冷启动等价测试，`.164`
+  持续可达。修复后的 unit 尚未做第二次真实重启验收。
+- 尚未进行 RDK 真动作和 DataCollector 实流验收。

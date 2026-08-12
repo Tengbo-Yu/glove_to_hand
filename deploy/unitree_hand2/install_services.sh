@@ -19,6 +19,8 @@ fi
 sudo install -d -m 0755 /opt/glove_to_hand/deploy/unitree_hand2
 sudo install -m 0755 "$script_dir/run_hand2_container.sh" \
   /opt/glove_to_hand/deploy/unitree_hand2/run_hand2_container.sh
+sudo install -m 0755 "$script_dir/configure_hand2_network.sh" \
+  /opt/glove_to_hand/deploy/unitree_hand2/configure_hand2_network.sh
 sudo install -m 0644 "$env_file" /etc/default/wuji-hand2
 sudo install -m 0644 "$script_dir/wuji-hand2-network.service" \
   /etc/systemd/system/wuji-hand2-network.service

@@ -4,6 +4,75 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-08-12 - Preserve Unitree management IP during Hand2 startup
+
+Base and branch:
+- Branch: `data_collect_hand2`.
+- Base: `8f9825b` (`feat: deploy dual Hand2 services on Unitree`).
+- Live target: `unitree@192.168.123.164`, Ubuntu 20.04 ARM64, boot ID
+  `47a13edf-1f2c-4819-a810-8b93a234b4aa` after the incident reboot.
+
+Suggested commit message:
+`fix: preserve Unitree management IP in Hand2 service`
+
+Incident and root cause:
+- After the target rebooted, `wuji-hand2-network.service` executed
+  `ip address replace 192.168.1.100/32 dev eth0`. This replaced the normal
+  `192.168.123.164/24` management address instead of adding a secondary Hand2
+  address.
+- The resulting `/32` address had routes only to `.110` and `.111`, so it had no
+  return path to the operator host. The target emitted traffic as `.100` but did
+  not answer ordinary ARP/ping from the operator host.
+- Recovery used a short-lived, exact L2 path, restored `.164/24`, disabled the
+  faulty units, and removed the temporary operator-host address immediately
+  after normal SSH access returned. No Hand2 command frame or motion was sent.
+
+Changed files:
+- `deploy/unitree_hand2/configure_hand2_network.sh`: adds an idempotent,
+  fail-closed network helper. It requires `192.168.123.164/24` on `eth0`, adds
+  only `192.168.1.100/32`, installs the exact `.110`/`.111` host routes, and on
+  stop removes only those three Hand2-owned objects.
+- `deploy/unitree_hand2/wuji-hand2-network.service`: waits for NetworkManager
+  and calls the helper instead of using `ip address replace`.
+- `deploy/unitree_hand2/install_services.sh`: installs the helper executable.
+- `deploy/unitree_hand2/README.md`: documents the management-address invariant
+  and fail-closed behavior.
+- `deploy/unitree_hand2/UNITREE_HAND2_SERVICE_SOP.md`: replaces the unsafe
+  manual command, adds `.164` acceptance gates, precise incident recovery, and
+  the repaired live-validation record.
+
+Live target changes and rollback:
+- Installed the repaired helper and unit; the superseded unit is backed up at
+  `/var/backups/wuji-hand2/recovery_20260812_2224/`.
+- Re-enabled and started `wuji-hand2-network.service`,
+  `wuji-hand2@left.service`, and `wuji-hand2@right.service`.
+- The running image remains `codex/glove-to-hand-hand2:7abfcdb`; application
+  code, Hand2 IPs, control parameters, and DataCollector were not changed.
+
+Verification:
+- A deliberately wrong management CIDR returned exit 1 with
+  `Refusing Hand2 network setup`; `eth0` remained unchanged.
+- Normal start produced both `192.168.123.164/24` and
+  `192.168.1.100/32`, plus only the `.110` and `.111` direct `/32` routes.
+- Both hands answered 3/3 source-bound probes from `.100`; the operator host
+  subsequently reached `.164` for 20/20 probes and each hand for 3/3 probes.
+- Stop removed only `.100` and its two routes. Starting only the two Hand2
+  instances pulled the network dependency back in; all three units became
+  `enabled`/`active`, both containers ran, and ports `8765`/`8767` listened.
+- A non-command TCP probe caused logs to state each Hand2 remained disabled;
+  no valid qpos was sent.
+- Remote and repository SHA-256 hashes for the helper and unit matched.
+- `bash -n`, live fail-closed/start/stop checks, `systemd-analyze verify`,
+  `git diff --check`, and staged-diff review are required immediately before
+  commit.
+
+Known limitations:
+- The repaired unit passed a cold-start-equivalent dependency cycle but has not
+  yet been validated by a second physical target reboot.
+- No valid glove qpos or Hand2 motion was sent. The supervised first-motion
+  procedure remains required.
+- DataCollector stream growth and malformed counters remain unverified.
+
 ## 2026-08-12 - Deploy dual Hand2 services on Unitree
 
 Base and branch:
