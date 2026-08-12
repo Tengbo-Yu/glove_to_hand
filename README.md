@@ -1,8 +1,16 @@
+# 串口连接开发板
+```
+  sudo apt install picocom
+  sudo picocom -b 115200 /dev/ttyUSB0
+  输入用户名和密码都为sunrise
+  ip -4 addr show wlan0
+```
+
 # Glove 连接 RDK_X5
 
 ```
 Host sunrise
-    HostName 10.1.11.231
+    HostName 192.168.112.230
     User sunrise
 PWD sunrise
 ```
@@ -19,6 +27,13 @@ RDK_X5 运行
 ping 192.168.1.100 （左手）
 ping 192.168.1.101 （右手）
 
+```
+
+# 环境配置
+```
+cd wuji-retargeting
+pip install -r requirements.txt
+pip istall -e .
 ```
 
 # Wuji Hand2 连接机器人
@@ -49,10 +64,11 @@ bash teleop_dual_robot_hand.sh
 # 本地运行
 ```
 cd glove_to_hand/
-ROBOT_HAND_HOST=robot.ip bash teleop_host_bridge.sh
+ROBOT_HAND_HOST=robot.ip bash teleop_dual_host_bridge.sh
 ```
 
 # RDK_X5运行
 ```
+conda activate wuji_new
 bash /home/sunrise/glove_to_hand/teleop_dual_rdk_keypoints.sh
 ```
