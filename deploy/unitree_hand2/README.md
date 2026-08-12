@@ -16,6 +16,10 @@ Target-specific deployment for `unitree@192.168.123.164`.
 - `wuji-hand2@left.service` listens on TCP `8765`.
 - `wuji-hand2@right.service` listens on TCP `8767`.
 - Both services use the offline ARM64 image named in `/etc/default/wuji-hand2`.
+- The field-validated sender path is RDK X5 `192.168.112.230` through the
+  `Delta` Wi-Fi connection to Unitree `wlan0` (DHCP address
+  `192.168.112.106` during the 2026-08-12 acceptance).  Re-check this DHCP
+  address after reboot instead of treating it as static.
 
 The service process is ready at boot, but the hardware remains disabled until
 that side receives its first valid, non-zero, side-matched command frame.  A
@@ -48,8 +52,9 @@ journalctl -fu wuji-hand2@right.service
 
 Do not run another Wuji Studio/control process for the same hand while this
 service owns it.  Keep the mechanical workspace clear before starting an RDK
-sender.  Service/port health is not motion acceptance; a real command test must
-separately verify the selected side, joint order, watchdog and physical motion.
+sender.  The 2026-08-12 field run verified both sides, continuous keypoint
+traffic, physical control, sender disconnect and Hand2 disable; DataCollector
+traffic was deliberately disabled and remains separately unverified.
 
 ## Offline image inputs
 

@@ -7,12 +7,12 @@
 ## 1. 已验证范围与安全边界
 
 本次已验证：ARM64 离线镜像构建、两只手的 SDK 扫描和只读诊断、网络路由、
-systemd 自启动、左右 TCP 监听、hello-only 不使能、命令看门狗代码路径以及
-容器内 29 个聚焦测试。
+systemd 自启动、左右 TCP 监听、hello-only 不使能、命令看门狗、容器内 29 个
+聚焦测试，以及 RDK 经 Unitree 的 Delta Wi-Fi 向左右服务持续发送关键点并实际
+驱动两只 Hand2。停止 RDK 后，两侧均记录禁用和关闭 socket，服务继续监听。
 
-本次**没有**发送手套驱动的有效关节命令，也没有做真机运动验收；服务在线不等于
-运动链路已经验收。当前 `192.168.123.222:6013-6016` 不可达，因此
-DataCollector 实流验收也仍待完成。
+真机运动验收不等于 DataCollector 验收。当前控制试验显式设置
+`DATA_COLLECTOR_TELEMETRY=0`，`192.168.123.222:6011-6016` 的实流仍未验收。
 
 安全规则：
 
@@ -30,7 +30,8 @@ DataCollector 实流验收也仍待完成。
 | --- | --- | --- |
 | 左 Hand2 | `WH2JA01260717002` / `192.168.1.110:7447` | `8765/tcp` |
 | 右 Hand2 | `WH2KA01260730030` / `192.168.1.111:7447` | `8767/tcp` |
-| RDK 命令发送端 | 连接 `192.168.123.164` | `8765`、`8767` |
+| RDK 命令发送端 | `192.168.112.230`，经 Delta Wi-Fi 连接 Unitree | `8765`、`8767` |
+| Unitree Wi-Fi | 本次 DHCP 地址 `192.168.112.106` | `8765`、`8767` |
 | DataCollector（待验收） | `192.168.123.222` | `6013-6016` |
 
 本次**不需要修改 Hand2 IP**。目标机原有
@@ -270,16 +271,25 @@ done
 不可达且端口未开放，所以不能宣称数采已验收。正式采集时应先启动
 DataCollector，再检查对应流消息数持续增加且 `malformed_count=0`。
 
-## 8. 首次真机运动验收（本次未执行）
+## 8. 双手真机运动验收（2026-08-12 已执行）
 
 只有负责人批准后执行：退出 Wuji Studio，清空双手周边，确认左右手映射，安排
 急停/断电人员，然后在 RDK 仓库目录运行：
 
 ```bash
-HOST_RETARGET_HOST=192.168.123.164 \
+DRY_RUN=1 bash teleop_dual_rdk_unitree_wifi.sh
+
+UNITREE_WIFI_HOST=192.168.112.106 \
+  bash teleop_dual_rdk_unitree_wifi.sh
+```
+
+`teleop_dual_rdk_unitree_wifi.sh` 与本次现场使用的以下显式参数等价：
+
+```bash
+HOST_RETARGET_HOST=192.168.112.106 \
 LEFT_PORT=8765 RIGHT_PORT=8767 \
-DATA_COLLECTOR_TELEMETRY=0 \
-bash teleop_dual_rdk_keypoints.sh
+WUJI_CONDA_ENV=wuji_new DATA_COLLECTOR_TELEMETRY=0 \
+  bash teleop_dual_rdk_keypoints.sh
 ```
 
 建议先保持一只手完全静止，只缓慢弯曲另一只手的一个关节，分别确认左右选择、
@@ -290,6 +300,11 @@ bash teleop_dual_rdk_keypoints.sh
 3. 停止 RDK 进程后 `1 s` 内手进入 disabled，服务仍可监听下一客户端。
 4. 重新连接前 Hand2 保持 disabled，不因 hello-only 或服务重启而自动使能。
 5. 若启用数采，6013-6016 流持续增加且无 malformed。
+
+本次已确认左右客户端均来自 `192.168.112.230`，左右序列号和 handedness 匹配，
+两侧均 `online=20/20` 并进入 enabled；持续递增的 keypoint 序列被 robot-side
+retargeting 接收。停止发送端后，两侧在同一秒记录断开、disabled 和 socket
+closed，机器人接收服务没有重启并继续监听。
 
 任何异常立即停 RDK；若看门狗未按预期禁用，则直接断电，不要靠继续发命令恢复。
 
@@ -306,7 +321,7 @@ sudo journalctl -fu wuji-hand2@right.service
 sudo systemctl start wuji-hand2-network.service \
   wuji-hand2@left.service wuji-hand2@right.service
 
-# 停机：先在 RDK 上 Ctrl-C，并等待至少 1 s，再执行
+# 停机：先在 RDK 上 Ctrl-C，并确认两侧 disabled，再执行
 sudo systemctl stop wuji-hand2@left.service wuji-hand2@right.service
 
 # 若不再需要 Hand2 专用地址和路由
@@ -396,4 +411,15 @@ boot ID `17463a66-2a5f-49a5-84fa-4e99ee40bfb9` 的重启验收发现：系统在
 - 第二次真实重启 boot ID `17463a66-2a5f-49a5-84fa-4e99ee40bfb9` 证明 `.164`
   不再被覆盖，但暴露 `.164` 晚于 `network-online.target` 出现的时序；已加入 60 秒
   有界等待。包含等待逻辑的版本尚未做第三次真实重启验收。
-- 尚未进行 RDK 真动作和 DataCollector 实流验收。
+- Unitree 已连接 `Delta`，本次 DHCP 地址为 `192.168.112.106/24`；到 RDK
+  `192.168.112.230` 的 10 次反向 ping 为 `0%` 丢包，平均 RTT `5.755 ms`。
+- RDK 到 Unitree 的 `8765/8767` 两路 TCP 均建立；左右服务分别识别
+  `WH2JA01260717002` 和 `WH2KA01260730030`，固件 `2.2.3`、`online=20/20`，
+  使用 `KP=3.5`、`KD=0.1`、电流限制 `1.5 A` 进入 enabled 并持续接收序列。
+- 真机发送期间三项 Unitree 服务均 active，左右 `NRestarts=0`。23:10:52 停止
+  RDK 发送端后，两侧均记录 `Hand 2 disabled and socket closed`，连接清空，
+  `8765/8767` 保持监听。
+- RDK 的 `192.168.1.20/24` 是运行时追加，发送端不是开机自启动服务；Unitree
+  的 Delta 连接为 NetworkManager autoconnect，但 DHCP 地址可能变化。两端重启后
+  必须重新检查地址和路由。
+- 尚未进行 DataCollector 实流验收；本次控制显式关闭 telemetry。

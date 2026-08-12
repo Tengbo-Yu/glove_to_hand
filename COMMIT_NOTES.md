@@ -4,6 +4,121 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-08-12 - Merge the latest RDK instructions and record field-verified direct control
+
+Base and branch:
+- Target branch/worktree: `data_collect_hand2` at `65343df`, checked out only in
+  `/home/descfly/workspace/code/glove_to_hand_data_collect_hand2_fix`.
+- Merged branch: `RDK_X5_hand2` at `c3599d3` with `--no-ff --no-commit`.
+- Merged commits: `a16c373` (RDK access/README update) and `c3599d3` (current
+  RDK Wi-Fi address, dual-host command correction and environment notes).
+- The target branch already contains `7abfcdb`, `8f9825b`, `1242320` and
+  `65343df`; this merge preserves both the Hammerhead telemetry work and the
+  three Unitree deployment/network safety commits.
+
+Suggested commit message:
+`merge: record field-verified RDK to Unitree Hand2 path`
+
+Purpose and resulting topology:
+- Record the hardware-proven path as two Wuji gloves -> RDK X5
+  `192.168.112.230` -> Delta Wi-Fi -> Unitree `wlan0`
+  `192.168.112.106` -> robot-side retargeting on ports `8765/8767` -> left and
+  right Hand2. The development PC is not in the command path.
+- Preserve Unitree management on `192.168.123.164/24` and its separate Hand2
+  address/routes. No Hand2 persistent IP change was required.
+- Keep the generic RDK scripts configurable. Add a field-profile wrapper rather
+  than changing the legacy `10.1.10.166:8865/8866` defaults globally.
+
+Changed files:
+- `README.md`: replaces the stale local-PC/three-stage overview with the current
+  direct topology, RDK runtime routes, startup/stop order, watchdog boundary,
+  persistence boundary, and links to the detailed RDK and Unitree documents.
+  It does not store an SSH password.
+- `README_RDK.md`: adds the current dual-hand direct procedure, makes the DHCP
+  address and RDK runtime route limitations explicit, and separates the
+  field-verified control path from DataCollector acceptance and legacy modes.
+- `teleop_dual_rdk_unitree_wifi.sh`: encodes the exact field profile
+  (`192.168.112.106`, ports `8765/8767`, `wuji_new`) while defaulting
+  DataCollector telemetry off until the collector is independently accepted.
+- `deploy/unitree_hand2/README.md` and
+  `deploy/unitree_hand2/UNITREE_HAND2_SERVICE_SOP.md`: replace the former
+  “motion unverified” boundary with the actual dual-hand evidence, retain the
+  DataCollector limitation, and record normal stop/disable behavior.
+- `COMMIT_NOTES.md`: records merge ancestry, deployed/runtime state, evidence,
+  validation and remaining limitations before the merge commit.
+
+Live target and field evidence:
+- Unitree boot ID was `17463a66-2a5f-49a5-84fa-4e99ee40bfb9`. NetworkManager
+  connected `wlan0` to `Delta` as `192.168.112.106/24`; the connection is set
+  to autoconnect. Unitree -> RDK measured 10/10 ICMP replies, `0%` loss and
+  `5.755 ms` average RTT.
+- RDK used repository `RDK_X5_hand2` at `c3599d3`, conda env `wuji_new`, Wi-Fi
+  `192.168.112.230/24`, and a runtime-only `192.168.1.20/24` plus exact routes
+  to glove addresses `.100` and `.101`. Both gloves answered reachability
+  probes before control.
+- The sender used `HOST_RETARGET_HOST=192.168.112.106`, `LEFT_PORT=8765`,
+  `RIGHT_PORT=8767`, and `DATA_COLLECTOR_TELEMETRY=0`. Both TCP connections were
+  established directly from the RDK; no local-PC bridge ran.
+- Unitree matched left `WH2JA01260717002` and right `WH2KA01260730030`, firmware
+  `2.2.3`, handedness and `online=20/20`. Both received first valid frames,
+  warmed retargeting, enabled at `KP=3.5`, `KD=0.1`, current limit `1.5 A`, and
+  showed sustained increasing receive sequences while physically following the
+  gloves. All three Unitree units stayed active and both hand units reported
+  `NRestarts=0`.
+- The RDK sender was stopped at 23:10:52. Both Unitree services logged client
+  disconnect followed by `Session ended. Hand 2 disabled and socket closed`;
+  established connections and RDK sender processes were absent afterward,
+  while `8765/8767` continued listening for a future client.
+
+Runtime effects and persistence:
+- Last verified RDK sender state after acceptance was stopped/inactive. The
+  field run used a transient user unit with `Restart=on-failure`; it was reset
+  and removed after stopping and is not a boot service.
+- At stop acceptance, Unitree Hand2 network/left/right services remained enabled
+  and active, but both hands were disabled without a valid sender. Unitree
+  `Delta` Wi-Fi is an autoconnect NetworkManager profile.
+- RDK `192.168.1.20/24` and its glove routes were added with runtime `ip`
+  commands and will disappear after RDK reboot. Unitree Wi-Fi uses DHCP, so its
+  `.112.106` address must be rechecked after reboot.
+- No DataCollector process, configuration or production data was modified.
+
+Verification before commit:
+- `bash -n` passed for every tracked/new `*.sh` file.
+- `teleop_dual_rdk_unitree_wifi.sh` passed `DRY_RUN=1` with both its production
+  defaults and complete test overrides. The output confirmed host, both ports,
+  conda environment and telemetry flag; no sender or hardware connection was
+  started.
+- Local focused tests passed `25` cases: DataCollector telemetry `5`, Hand2
+  server/protocol `13`, MCAP replay `4`, and dependency-free Hand2 adaptation
+  `7`. The MCAP suite used `mcap` installed only in a temporary `/tmp` target.
+- Four retarget construction tests could not import local `nlopt`; they did not
+  reach assertions. This is the already-recorded system-Python native dependency
+  gap. The exact deployed ARM64 image previously passed all `29` Hand2,
+  telemetry and server tests during live acceptance.
+- `git diff --check`, full staged name/stat/content review, executable-mode
+  inspection and staged secret-string scan passed. Pre-commit ancestry matched
+  `ORIG_HEAD=65343df` and `MERGE_HEAD=c3599d3`; both parents are verified again
+  after commit.
+- Hardware verification above applies to the explicit environment invocation
+  of `teleop_dual_rdk_keypoints.sh`. The new wrapper is command-equivalent but
+  was added after the live run and received static/offline validation only.
+
+Known limitations:
+- DataCollector `6011-6016`, `/api/status`, message growth and
+  `malformed_count=0` were not accepted; control success is not collection
+  success.
+- The bounded 60-second Unitree management-address wait has not been validated
+  by a third physical reboot. The Delta autoconnect profile has also not been
+  reboot-accepted.
+- The RDK sender and glove-interface address are deliberately not installed as
+  boot-persistent services/configuration in this commit. An operator must clear
+  the workspace, recheck both sides and start the sender explicitly.
+- During the final post-stop commit checks, the development host could no longer
+  resolve either `192.168.112.106` or `192.168.112.230` on the Delta LAN, so an
+  additional remote container rerun was not possible. No network change,
+  service restart or hardware command was attempted; current live reachability
+  must be rechecked independently from the earlier successful field evidence.
+
 ## 2026-08-12 - Wait for the Unitree management address at boot
 
 Base and branch:

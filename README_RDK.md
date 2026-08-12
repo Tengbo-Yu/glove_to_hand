@@ -1,28 +1,72 @@
 # RDK → Hand 2 Teleop 使用说明
 
-host1 和 robot 运行在同一台主机时，推荐使用两进程直连架构：
+## 当前已验证的双手直连拓扑
+
+2026-08-12 的真机链路把 retargeting 和 Hand2 SDK 都放在 Unitree 上，不经过
+开发机：
 
 ```text
-RDK 小主机 + 右手套
-    │ keypoints, TCP 10.1.10.166:8866
-    ▼
-本机：Hand 2 retargeting + wuji-sdk → 右侧 Wuji Hand 2 WH2KA01260730030
+双 Wuji 手套 -> RDK X5 192.168.112.230
+  -> Delta Wi-Fi -> Unitree wlan0 192.168.112.106
+  -> robot-side retargeting 8765/8767 -> 双 Wuji Hand2
 ```
+
+Unitree 的 `192.168.112.106` 是本次 DHCP 地址，重启后必须重新读取，不能把它
+当作永久静态地址。通用脚本仍保留旧部署的 `10.1.10.166:8865/8866` 默认值；
+当前真机使用 `teleop_dual_rdk_unitree_wifi.sh` 包装脚本覆盖为
+`192.168.112.106:8765/8767`。
 
 这与官方 `teleop_real.py` 的单循环结构一致，省去了本机
 `host_retarget_bridge → hand_qpos_server` 的第二跳 TCP 和第二层低通滤波。
 
-## 默认地址
-
-- RDK → host1：当前默认 `10.1.10.166`
-- 左手端口：RDK→主机 `8865`
-- 右手端口：RDK→主机 `8866`
-
-如本机地址变化，在 RDK 上用 `HOST_RETARGET_HOST=<本机可达IP>` 覆盖。只有配置了
-专用直连网后才使用旧的 `192.168.126.20` 地址。
-
 所有 Python 入口默认使用 `wuji_new`，协议为 `glove-qpos-v2`。旧版
 Hand1/USB 客户端与 v1 qpos 会被拒绝。
+
+## 双手真机启动顺序
+
+### 1. 检查 Unitree 接收端
+
+在 Unitree 上确认 Delta Wi-Fi、Hand2 网络和两侧监听服务；这些服务已启用开机
+启动，但 Hand2 在收到第一帧有效命令前保持 disabled：
+
+```bash
+ip -4 address show wlan0
+sudo systemctl is-active wuji-hand2-network.service \
+  wuji-hand2@left.service wuji-hand2@right.service
+sudo ss -lntp '( sport = :8765 or sport = :8767 )'
+```
+
+### 2. 检查 RDK 到手套和 Unitree 的网络
+
+RDK 的手套地址是运行时配置，重启后需重新追加：
+
+```bash
+sudo ip address add 192.168.1.20/24 dev eth0 2>/dev/null || true
+sudo ip route replace 192.168.1.100/32 dev eth0 src 192.168.1.20
+sudo ip route replace 192.168.1.101/32 dev eth0 src 192.168.1.20
+ping -c 3 192.168.1.100
+ping -c 3 192.168.1.101
+ping -c 3 192.168.112.106
+```
+
+### 3. 启动双手套发送
+
+清空双手工作区后，在 RDK 仓库根目录前台启动：
+
+```bash
+DRY_RUN=1 bash teleop_dual_rdk_unitree_wifi.sh
+
+UNITREE_WIFI_HOST=192.168.112.106 \
+  bash teleop_dual_rdk_unitree_wifi.sh
+```
+
+包装脚本默认关闭 DataCollector telemetry，因为本次只验收了直接控制链路，尚未
+验收 `192.168.123.222:6011-6016`。正式采集时必须先单独验收 DataCollector，
+再显式设置 `DATA_COLLECTOR_TELEMETRY=1` 和 `DATA_COLLECTOR_HOST=<地址>`。
+
+停止时先在 RDK 端按 `Ctrl-C`。Unitree 的 1 秒命令看门狗会禁用两只手；日志应
+出现两侧 `Session ended. Hand 2 disabled and socket closed.`。RDK 发送端当前
+不是开机自启动服务。
 
 ## 单右手推荐启动顺序
 
@@ -197,9 +241,9 @@ HAND_SIDE=right HOST_RETARGET_HOST=10.1.10.166 bash teleop_rdk_keypoints.sh
 同机运行时不要同时启动 `teleop_direct_hand.sh` 和
 `teleop_host_bridge.sh`，二者都会占用 `8866`。
 
-## 双手或分离 robot 主机
+## 旧三进程双手或分离 robot 主机
 
-双手仍使用：
+只有 retargeting 主机与 robot 分离时才使用：
 
 ```bash
 ENABLE_HAND2=1 bash teleop_dual_robot_hand.sh
