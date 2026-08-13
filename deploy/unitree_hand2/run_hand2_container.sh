@@ -50,6 +50,9 @@ fi
 if [[ "${DEBUG_LATENCY:-0}" == "1" ]]; then
   args+=(--debug-latency)
 fi
+if [[ -n "${RETARGET_MAXEVAL:-}" ]]; then
+  args+=(--retarget-maxeval "$RETARGET_MAXEVAL")
+fi
 
 exec /usr/bin/docker run --rm \
   --name "wuji-hand2-$side" \

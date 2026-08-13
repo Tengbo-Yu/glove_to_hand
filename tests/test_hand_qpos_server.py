@@ -8,6 +8,7 @@ from unittest.mock import patch
 import numpy as np
 
 from hand_qpos_server import (
+    LatestRetargetWorker,
     QposSmoother,
     build_hand_command_payload,
     build_hand_state_payload,
@@ -40,6 +41,65 @@ class QposSmootherTest(unittest.TestCase):
         smoother = QposSmoother()
         with self.assertRaisesRegex(ValueError, "shape"):
             smoother.initialize(np.zeros(20, dtype=np.float64))
+
+
+class LatestRetargetWorkerTest(unittest.TestCase):
+    def test_keeps_only_latest_pending_frame(self):
+        first_started = threading.Event()
+        release_first = threading.Event()
+        processed = []
+
+        def retarget(keypoints):
+            keypoints = np.asarray(keypoints, dtype=np.float64)
+            seq = int(keypoints[0, 0])
+            processed.append(seq)
+            if seq == 1:
+                first_started.set()
+                release_first.wait(timeout=1.0)
+            return np.full(20, seq, dtype=np.float64)
+
+        pipeline = SimpleNamespace(
+            retarget=retarget,
+            retargeter=SimpleNamespace(),
+        )
+        worker = LatestRetargetWorker(pipeline)
+        worker.start()
+
+        def item(seq):
+            return {
+                "message": make_keypoints_message(
+                    seq,
+                    np.full((21, 3), seq, dtype=np.float64),
+                    time.time(),
+                    "right",
+                ),
+                "frame_start_perf": time.perf_counter(),
+            }
+
+        try:
+            self.assertFalse(worker.submit(item(1)))
+            self.assertTrue(first_started.wait(timeout=1.0))
+            self.assertFalse(worker.submit(item(2)))
+            self.assertTrue(worker.submit(item(3)))
+            release_first.set()
+
+            deadline = time.monotonic() + 1.0
+            results = []
+            while time.monotonic() < deadline and (not results or processed[-1] != 3):
+                result = worker.take_result()
+                if result is not None:
+                    results.append(result)
+                time.sleep(0.005)
+            result = worker.take_result()
+            if result is not None:
+                results.append(result)
+
+            self.assertEqual(processed, [1, 3])
+            self.assertEqual(results[-1]["message"]["seq"], 3)
+            np.testing.assert_array_equal(results[-1]["qpos"], 3.0)
+        finally:
+            release_first.set()
+            worker.stop()
 
 
 class Hand2TelemetryPayloadTest(unittest.TestCase):
@@ -150,7 +210,6 @@ class LatencyAckConnectionTest(unittest.TestCase):
             retargeter=fake_retargeter,
             retarget=lambda keypoints: np.zeros(20, dtype=np.float64),
         )
-
         try:
             client_sock.settimeout(1.0)
             with patch(
@@ -187,6 +246,83 @@ class LatencyAckConnectionTest(unittest.TestCase):
                 self.assertGreaterEqual(ack["server_frame_ms"], ack["server_retarget_ms"])
                 server_thread.join(timeout=1.0)
                 self.assertFalse(server_thread.is_alive())
+        finally:
+            client_sock.close()
+            server_sock.close()
+
+    def test_command_timeout_ends_session_without_server_exception(self):
+        server_sock, client_sock = socket.socketpair()
+        args = SimpleNamespace(
+            socket_timeout=0.02,
+            config=None,
+            hand="right",
+            retarget_lp_alpha=0.0,
+            retarget_norm_delta=None,
+            retarget_maxeval=None,
+            debug_latency=False,
+            enable_hand=True,
+            hand_sn="WH2KTEST",
+            hand_address="",
+            hand_device_name="test-right",
+            kp=3.5,
+            kd=0.1,
+            current_limit=1.5,
+            enable_timeout=0.1,
+            control_rate=200.0,
+            duration=0.5,
+            disable_output_smoothing=True,
+            smooth_tau=0.0,
+            max_joint_velocity=0.0,
+            command_timeout=0.05,
+            print_every=10.0,
+            debug_slow_ms=100.0,
+            home_on_shutdown=False,
+            home_duration=0.0,
+            rate=60.0,
+        )
+        fake_pipeline = SimpleNamespace(
+            config_path="fake-hand2.yaml",
+            retargeter=SimpleNamespace(
+                lp_filter=SimpleNamespace(alpha=0.2),
+                optimizer=SimpleNamespace(norm_delta=0.04),
+            ),
+            retarget=lambda keypoints: np.zeros(20, dtype=np.float64),
+        )
+        fake_backend = SimpleNamespace(
+            is_enabled=True,
+            serial_number="WH2KTEST",
+            enable=lambda: None,
+            current_positions=lambda: np.zeros(20, dtype=np.float64),
+            send=lambda qpos: None,
+            latest_positions=lambda: None,
+            close=lambda: None,
+        )
+
+        try:
+            client_sock.sendall(
+                encode_message(
+                    make_qpos_message(
+                        1,
+                        np.zeros((5, 4), dtype=np.float64),
+                        time.time(),
+                        "right",
+                    )
+                )
+            )
+            with (
+                patch(
+                    "hand_qpos_server.Hand2RetargetPipeline",
+                    return_value=fake_pipeline,
+                ),
+                patch(
+                    "hand_qpos_server.WujiHand2Backend",
+                    return_value=fake_backend,
+                ),
+            ):
+                start = time.monotonic()
+                serve_connection(server_sock, ("local", 0), args, lambda: False)
+                elapsed = time.monotonic() - start
+            self.assertLess(elapsed, 0.3)
         finally:
             client_sock.close()
             server_sock.close()

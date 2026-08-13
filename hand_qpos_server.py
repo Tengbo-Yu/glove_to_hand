@@ -2,6 +2,7 @@ import argparse
 import os
 import signal
 import socket
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -112,6 +113,110 @@ class IntervalStats:
         self.counters.clear()
 
 
+class LatestRetargetWorker:
+    """Retarget only the newest pending frame outside the fixed-rate control loop.
+
+    The analytical optimizer has input-dependent latency and cannot be cancelled
+    safely once NLopt has started.  Keep at most one pending frame so latency is
+    bounded by the current solve plus the newest solve instead of building an
+    unbounded FIFO of stale glove poses.
+    """
+
+    def __init__(self, pipeline, *, debug_timing=False):
+        self.pipeline = pipeline
+        self.debug_timing = bool(debug_timing)
+        self._condition = threading.Condition()
+        self._pending = None
+        self._result = None
+        self._stop = False
+        self._started = False
+        self._thread = threading.Thread(
+            target=self._run,
+            name="hand2-retarget",
+            daemon=True,
+        )
+
+    def start(self):
+        if not self._started:
+            self._started = True
+            if self.debug_timing:
+                reset_optimizer_timing(self.pipeline.retargeter)
+            self._thread.start()
+
+    def submit(self, item):
+        """Replace the pending work item and return whether one was superseded."""
+        with self._condition:
+            if self._stop:
+                return False
+            superseded = self._pending is not None
+            self._pending = item
+            self._condition.notify()
+            return superseded
+
+    def take_result(self):
+        """Return the newest completed result without blocking the control loop."""
+        with self._condition:
+            result, self._result = self._result, None
+            return result
+
+    def stop(self, timeout=1.0):
+        with self._condition:
+            self._stop = True
+            self._pending = None
+            self._condition.notify_all()
+        if self._started and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+
+    def _run(self):
+        while True:
+            with self._condition:
+                while self._pending is None and not self._stop:
+                    self._condition.wait()
+                if self._stop:
+                    return
+                item, self._pending = self._pending, None
+
+            started = time.perf_counter()
+            try:
+                qpos = self.pipeline.retarget(item["message"]["keypoints"]).reshape(5, 4)
+                error = None
+            except BaseException as exc:
+                qpos = None
+                error = exc
+            completed = time.perf_counter()
+
+            opt_iters = None
+            if self.debug_timing:
+                optimizer = getattr(self.pipeline.retargeter, "optimizer", None)
+                timing = (
+                    optimizer.get_timing_stats()
+                    if optimizer is not None and hasattr(optimizer, "get_timing_stats")
+                    else None
+                )
+                if timing is not None and timing.iter_counts:
+                    opt_iters = timing.iter_counts[-1]
+                reset_optimizer_timing(self.pipeline.retargeter)
+
+            result = dict(item)
+            result.update(
+                qpos=qpos,
+                error=error,
+                retarget_ms=(completed - started) * 1000.0,
+                retarget_queue_ms=max(
+                    0.0, (started - item["frame_start_perf"]) * 1000.0
+                ),
+                frame_ms=max(
+                    0.0, (completed - item["frame_start_perf"]) * 1000.0
+                ),
+                opt_iters=opt_iters,
+            )
+            with self._condition:
+                # The 200 Hz consumer should normally take every result. If it
+                # is briefly delayed, a newer completed target is always safer
+                # than replaying an older one.
+                self._result = result
+
+
 def optimizer_timing_summary(retargeter):
     optimizer = getattr(retargeter, "optimizer", None)
     if optimizer is None or not hasattr(optimizer, "get_timing_stats"):
@@ -178,6 +283,7 @@ def parse_args():
     parser.add_argument("--disable-output-smoothing", action="store_true", help="Send each retargeted qpos directly without output smoothing/resampling.")
     parser.add_argument("--retarget-lp-alpha", type=float, default=0.0, help="Override retargeter low-pass alpha. 0 keeps config value.")
     parser.add_argument("--retarget-norm-delta", type=float, default=None, help="Override retargeter motion deadband. Lower is more responsive; omit to keep the YAML value.")
+    parser.add_argument("--retarget-maxeval", type=int, default=None, help="Override the NLopt evaluations per frame. Lower bounds worst-case CPU latency; omit to keep the optimizer default.")
     parser.add_argument("--print-every", type=float, default=1.0, help="Seconds between status prints.")
     parser.add_argument("--socket-timeout", type=float, default=1.0, help="Seconds to wait for a glove frame before printing a timeout warning.")
     parser.add_argument("--command-timeout", type=float, default=1.0, help="Disable Hand 2 if no valid frame arrives for this many seconds. 0 disables the watchdog.")
@@ -397,6 +503,8 @@ def serve_connection(conn, peer, args, stop_requested):
     backend = None
     command_telemetry = None
     state_telemetry = None
+    retarget_worker = None
+    previous_switch_interval = None
     receiver_stop = threading.Event()
     receiver_done = threading.Event()
     receiver_state = {
@@ -472,6 +580,15 @@ def serve_connection(conn, peer, args, stop_requested):
                 raise ValueError("--retarget-norm-delta must be non-negative")
             retargeter.optimizer.norm_delta = retarget_norm_delta
             print(f"Retarget norm_delta override: {retarget_norm_delta}")
+        retarget_maxeval = getattr(args, "retarget_maxeval", None)
+        if retarget_maxeval is not None:
+            if retarget_maxeval <= 0:
+                raise ValueError("--retarget-maxeval must be positive")
+            optimizer = retargeter.optimizer
+            if not hasattr(optimizer, "opt") or not hasattr(optimizer.opt, "set_maxeval"):
+                raise RuntimeError("Configured retargeter does not expose an NLopt maxeval setting")
+            optimizer.opt.set_maxeval(retarget_maxeval)
+            print(f"Retarget NLopt maxeval override: {retarget_maxeval}")
         set_optimizer_timing(retargeter, args.debug_latency)
         if args.debug_latency:
             reset_optimizer_timing(retargeter)
@@ -572,6 +689,22 @@ def serve_connection(conn, peer, args, stop_requested):
             print(
                 "Output initialized from measured Hand 2 joint positions; "
                 "the first teleop frame will be rate-limited."
+            )
+        retarget_worker = LatestRetargetWorker(
+            pipeline,
+            debug_timing=args.debug_latency,
+        )
+        retarget_worker.start()
+        # The optimizer objective executes Python callbacks.  A shorter GIL
+        # handoff interval prevents a long solve from monopolizing the process
+        # for the default 5 ms, which is itself one complete 200 Hz control tick.
+        previous_switch_interval = sys.getswitchinterval()
+        if previous_switch_interval > 0.001:
+            sys.setswitchinterval(0.001)
+        print(
+            "Retarget scheduling: asynchronous latest-frame worker; "
+            "fixed-rate hand output is isolated from optimizer latency "
+            f"(Python switch interval={sys.getswitchinterval() * 1000.0:.1f}ms)."
         )
         stats = IntervalStats()
         report_start = time.monotonic()
@@ -602,16 +735,14 @@ def serve_connection(conn, peer, args, stop_requested):
             if eof:
                 break
 
-            new_target = False
             seq = last_seq
-            retarget_ms = 0.0
-            wire_age_ms = 0.0
-            server_queue_ms = 0.0
-            seq_gap = 0
             target_message = None
             target_dropped_socket = 0
+            target_seq_gap = 0
+            completed_result = retarget_worker.take_result()
             if message is not None and version != last_version:
                 frame_start = time.perf_counter()
+                server_queue_ms = 0.0
                 if received_perf is not None:
                     server_queue_ms = max(
                         0.0, (frame_start - received_perf) * 1000.0
@@ -625,6 +756,7 @@ def serve_connection(conn, peer, args, stop_requested):
                 last_seq = seq
                 dropped_socket_total += dropped
                 wire_age_ms = (time.time() - message["timestamp"]) * 1000.0
+                stats.inc("input_frames")
                 stats.add("wire_age_ms", wire_age_ms)
                 stats.inc("seq_gap", seq_gap)
                 stats.inc("dropped_socket", dropped)
@@ -634,24 +766,55 @@ def serve_connection(conn, peer, args, stop_requested):
                     stats.inc("decoded_frames", read_metrics.get("decoded_frames", 0))
                     stats.inc("malformed_messages", read_metrics.get("malformed_messages", 0))
 
+                work_item = {
+                    "message": message,
+                    "frame_start_perf": frame_start,
+                    "server_queue_ms": server_queue_ms,
+                    "wire_age_ms": wire_age_ms,
+                    "dropped": dropped,
+                    "dropped_socket_total": dropped_socket_total,
+                    "seq_gap": seq_gap,
+                    "read_metrics": read_metrics,
+                }
                 if message["type"] == "keypoints_frame":
-                    keypoints = message["keypoints"]
-                    if not np.allclose(keypoints, 0):
-                        retarget_start = time.perf_counter()
-                        last_qpos = pipeline.retarget(keypoints).reshape(5, 4)
-                        retarget_ms = (time.perf_counter() - retarget_start) * 1000.0
-                        new_target = True
+                    if not np.allclose(message["keypoints"], 0):
+                        if retarget_worker.submit(work_item):
+                            stats.inc("retarget_superseded")
+                        stats.inc("retarget_submitted")
+                    else:
+                        stats.inc("zero_keypoint_frames")
                 else:
-                    last_qpos = message["qpos"]
-                    new_target = True
-                if new_target:
-                    smoother.set_target(last_qpos)
-                    target_message = message
-                    target_dropped_socket = dropped
+                    work_item.update(
+                        qpos=np.asarray(message["qpos"], dtype=np.float64).reshape(5, 4),
+                        error=None,
+                        retarget_ms=0.0,
+                        retarget_queue_ms=0.0,
+                        frame_ms=(time.perf_counter() - frame_start) * 1000.0,
+                        opt_iters=None,
+                    )
+                    completed_result = work_item
+
+            if completed_result is not None:
+                if completed_result["error"] is not None:
+                    raise RuntimeError(
+                        f"{args.hand} Hand 2 retarget worker failed"
+                    ) from completed_result["error"]
+                last_qpos = completed_result["qpos"]
+                smoother.set_target(last_qpos)
+                target_message = completed_result["message"]
+                target_dropped_socket = completed_result["dropped"]
+                target_seq_gap = completed_result["seq_gap"]
+                seq = target_message["seq"]
+                retarget_ms = completed_result["retarget_ms"]
+                frame_ms = completed_result["frame_ms"]
+                server_queue_ms = completed_result["server_queue_ms"]
+                wire_age_ms = completed_result["wire_age_ms"]
+                read_metrics = completed_result["read_metrics"]
                 stats.add("retarget_ms", retarget_ms)
-                frame_ms = (time.perf_counter() - frame_start) * 1000.0
+                stats.add("retarget_queue_ms", completed_result["retarget_queue_ms"])
                 stats.add("server_frame_ms", frame_ms)
-                debug_payload = message.get("debug") or {}
+                stats.add("opt_iters", completed_result.get("opt_iters"))
+                debug_payload = target_message.get("debug") or {}
                 if args.debug_latency and debug_payload.get("request_ack"):
                     client_probe_perf = debug_payload.get("client_probe_perf")
                     if client_probe_perf is not None:
@@ -660,7 +823,7 @@ def serve_connection(conn, peer, args, stop_requested):
                             conn.sendall(
                                 encode_message(
                                     make_ack_message(
-                                        seq,
+                                        target_message["seq"],
                                         client_probe_perf,
                                         server_queue_ms,
                                         frame_ms,
@@ -682,7 +845,9 @@ def serve_connection(conn, peer, args, stop_requested):
                         f"server_queue_ms={server_queue_ms:.1f} "
                         f"socket_wait_ms={(read_metrics or {}).get('socket_wait_ms', 0.0):.1f} "
                         f"drain_ms={(read_metrics or {}).get('socket_drain_ms', 0.0):.1f} "
-                        f"dropped_in_read={dropped} seq_gap={seq_gap}",
+                        f"retarget_queue_ms={completed_result['retarget_queue_ms']:.1f} "
+                        f"dropped_in_read={target_dropped_socket} "
+                        f"seq_gap={target_seq_gap}",
                         flush=True,
                     )
 
@@ -694,10 +859,12 @@ def serve_connection(conn, peer, args, stop_requested):
                 and args.command_timeout > 0
                 and time.monotonic() - last_valid_frame_time > args.command_timeout
             ):
-                raise TimeoutError(
+                print(
                     f"No valid {args.hand} command frame for "
-                    f"{args.command_timeout:g}s; disabling Hand 2"
+                    f"{args.command_timeout:g}s; disabling Hand 2 and ending session",
+                    flush=True,
                 )
+                break
             if command_qpos is not None and backend is not None:
                 hand_start = time.perf_counter()
                 backend.send(command_qpos.reshape(-1))
@@ -730,7 +897,7 @@ def serve_connection(conn, peer, args, stop_requested):
                             peer=peer,
                             dropped_socket=target_dropped_socket,
                             dropped_socket_total=dropped_socket_total,
-                            seq_gap=seq_gap,
+                            seq_gap=target_seq_gap,
                             enable_hand=args.enable_hand,
                             applied_to_hand=backend is not None and command_qpos is not None,
                             apply_timestamp_ns=apply_timestamp_ns,
@@ -771,13 +938,14 @@ def serve_connection(conn, peer, args, stop_requested):
 
             now = time.monotonic()
             if now - last_print >= args.print_every and command_qpos is not None:
+                elapsed = max(now - report_start, 1e-9)
+                recv_fps = stats.counters["input_frames"] / elapsed
+                retarget_fps = stats.count("retarget_ms") / elapsed
+                control_fps = stats.counters["control_ticks"] / elapsed
                 if args.debug_latency:
-                    elapsed = max(now - report_start, 1e-9)
-                    recv_fps = stats.count("server_frame_ms") / elapsed
-                    control_fps = stats.counters["control_ticks"] / elapsed
-                    opt_summary = optimizer_timing_summary(retargeter)
                     print(
                         f"latency-server recv={received} recv_fps={recv_fps:.1f} "
+                        f"retarget_fps={retarget_fps:.1f} "
                         f"control_fps={control_fps:.1f} seq={seq} "
                         f"clock_wire_age_ms avg/p95/max={stats.avg('wire_age_ms'):.1f}/"
                         f"{stats.percentile('wire_age_ms', 95):.1f}/{stats.max('wire_age_ms'):.1f} "
@@ -786,6 +954,9 @@ def serve_connection(conn, peer, args, stop_requested):
                         f"{stats.max('server_queue_ms'):.1f} "
                         f"retarget_ms avg/p95/max={stats.avg('retarget_ms'):.1f}/"
                         f"{stats.percentile('retarget_ms', 95):.1f}/{stats.max('retarget_ms'):.1f} "
+                        f"retarget_queue_ms avg/p95/max={stats.avg('retarget_queue_ms'):.1f}/"
+                        f"{stats.percentile('retarget_queue_ms', 95):.1f}/"
+                        f"{stats.max('retarget_queue_ms'):.1f} "
                         f"socket_wait_ms avg/max={stats.avg('socket_wait_ms'):.1f}/{stats.max('socket_wait_ms'):.1f} "
                         f"drain_ms avg/max={stats.avg('socket_drain_ms'):.1f}/{stats.max('socket_drain_ms'):.1f} "
                         f"hand_write_ms avg/p95/max={stats.avg('hand_write_ms'):.1f}/"
@@ -794,29 +965,40 @@ def serve_connection(conn, peer, args, stop_requested):
                         f"{stats.max('ack_send_ms'):.2f} "
                         f"dropped_socket={int(stats.counters['dropped_socket'])} "
                         f"seq_gap={int(stats.counters['seq_gap'])} "
+                        f"retarget_superseded={int(stats.counters['retarget_superseded'])} "
+                        f"opt_iters avg/p90/max={stats.avg('opt_iters'):.1f}/"
+                        f"{stats.percentile('opt_iters', 90):.1f}/{stats.max('opt_iters'):.0f} "
                         f"thumb_J4 target/span={stats.last('thumb_j4_target'):.3f}/"
                         f"{stats.span('thumb_j4_target'):.3f} "
                         f"feedback/span={stats.last('thumb_j4_feedback'):.3f}/"
                         f"{stats.span('thumb_j4_feedback'):.3f} "
                         f"thumb={np.round(command_qpos[0], 3).tolist()} "
                         f"index={np.round(command_qpos[1], 3).tolist()} "
-                        f"{opt_summary}",
+                        "",
                         flush=True,
                     )
                     stats.reset()
                     report_start = now
-                    reset_optimizer_timing(retargeter)
                 else:
                     print(
-                        f"recv={received} seq={seq} "
+                        f"recv={received} recv_fps={recv_fps:.1f} "
+                        f"retarget_fps={retarget_fps:.1f} "
+                        f"control_fps={control_fps:.1f} seq={seq} "
                         f"thumb={np.round(command_qpos[0], 3).tolist()} "
-                        f"index={np.round(command_qpos[1], 3).tolist()}"
+                        f"index={np.round(command_qpos[1], 3).tolist()}",
+                        flush=True,
                     )
+                    stats.reset()
+                    report_start = now
                 last_print = now
     finally:
         receiver_stop.set()
         if receiver.is_alive():
             receiver.join(timeout=1.0)
+        if retarget_worker is not None:
+            retarget_worker.stop(timeout=1.0)
+        if previous_switch_interval is not None:
+            sys.setswitchinterval(previous_switch_interval)
         if backend is not None:
             if backend.is_enabled and args.home_on_shutdown:
                 try:

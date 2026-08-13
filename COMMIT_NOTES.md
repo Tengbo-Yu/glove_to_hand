@@ -4,6 +4,86 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-08-13 - Smooth robot-side Hand2 retargeting and harden the live path
+
+Base and branch:
+- Branch/worktree: `data_collect_hand2` in
+  `/home/descfly/workspace/code/glove_to_hand`, base `1f0c1e6`.
+- Runtime target: Unitree Orin NX at `192.168.123.164`, RDK X5 at
+  `192.168.112.230`, dual Hand2 on `192.168.1.110/.111`.
+
+Root cause and measurements before the change:
+- Delta Wi-Fi signal was strong and Hand2 writes were only about `0.2 ms`; neither
+  link bandwidth nor the SDK command publisher was the primary stutter source.
+- Robot-side NLopt/Pinocchio retargeting was synchronous with fixed-rate Hand2
+  output. Left usually took `10-18 ms`; the moving right hand often took `50-70
+  ms`, reached the 50-evaluation limit, and once reached about `99 ms`. Right
+  receive/control consequently fell to about `20-35 Hz` while the RDK sent 120 Hz.
+- A transient empty Hand2 joint-state feedback frame raised `RuntimeError`, exited
+  the right service, and broke the matching RDK TCP sender.
+- A later production run exposed a separate roughly two-second simultaneous Wi-Fi
+  stall while both Delta clients had power saving enabled. The one-second command
+  watchdog correctly disabled both hands, but exited both containers.
+
+Changed files and behavior:
+- `hand_qpos_server.py` moves keypoint retargeting to a latest-frame worker. It
+  keeps at most one pending pose, never builds a stale FIFO, and lets the smoother
+  continue fixed-rate Hand2 writes while the optimizer runs. Python's thread
+  switch interval is reduced from 5 ms to 1 ms during the session.
+- The server accepts `--retarget-maxeval`; the deployed and repository service
+  profile uses `20` evaluations to bound complex-pose CPU time. Production status
+  now reports receive, retarget and control frequencies even without latency ACKs.
+- A command timeout ends and disables only the current session; the keep-listening
+  process remains alive. The enable-on-first-valid-frame and one-second fail-safe
+  boundaries are unchanged.
+- `hand2_backend.py` ignores and counts transient invalid nonblocking feedback
+  frames. The strict pre-enable measured-position read still fails closed.
+- The Unitree wrapper/env example forwards `RETARGET_MAXEVAL`. Tests cover newest-
+  pending semantics, invalid feedback and non-exceptional command timeout.
+- `WUJI_HAND_TELEOP_SOP.md` records current frequency acceptance, CPU budget,
+  persistent Wi-Fi power-save checks and the GPU boundary.
+
+Live deployment and acceptance:
+- Built immutable Unitree ARM64 image
+  `codex/glove-to-hand-hand2:smooth-v2-20260813`, image ID
+  `sha256:484d9c38eb2a...`, and installed it in `/etc/default/wuji-hand2` with
+  `RETARGET_MAXEVAL=20`, `DEBUG_LATENCY=0`, `CONTROL_RATE=200`, `SMOOTH_TAU=.02`
+  and `MAX_JOINT_VELOCITY=6`. The prior env is backed up as
+  `/etc/default/wuji-hand2.before_async_retarget_20260813`.
+- Set the existing Delta NetworkManager profiles on both Unitree and RDK to
+  `802-11-wireless.powersave=disable`; live `iw` checks reported power save off.
+  No IP address, route, SSID or robot management configuration was changed.
+- With the default 50 evaluations, async scheduling raised right control from the
+  former `20-35 Hz` to roughly `130-170 Hz`. With 20 evaluations and production
+  diagnostics off, sustained logs commonly showed input `45-95 Hz`, retarget
+  `35-80 Hz`, and Hand2 output `170-200 Hz`.
+- A final 90-second dual-hand hardware run survived active right-hand motion with
+  both Unitree services and the RDK sender active, both Unitree `NRestarts=0`, no
+  simultaneous zero-input stall, and both Delta links still power-save off.
+- Explicit RDK stop produced two client-disconnect and two session-disabled logs;
+  both Unitree services stayed active/listening with `NRestarts=0`.
+
+Verification:
+- Exact patched sources mounted into the deployed ARM64 dependency image passed
+  all 26 Hand2/server tests, including real `nlopt`, Pinocchio and Hand2 models.
+- Local dependency-free server/backend tests passed; local system Python still
+  lacks `nlopt`, so model construction was validated only in the ARM64 image.
+- `python3 -m py_compile`, shell syntax, `git diff --check`, deployed source hashes,
+  image ID, service enablement/listeners and live safety shutdown were checked.
+
+Known limitations:
+- GPU acceleration was not implemented. The Orin NX GPU exists, but the current
+  NLopt/Pinocchio objective is CPU/Python and the deployed image has no CUDA ML
+  stack; the ZED workload already uses the GPU. A CUDA rewrite needs independent
+  numerical equivalence and real-hand safety validation.
+- The final sustained run is hardware evidence for smoothness/frequency and safety,
+  but subjective operator feel still needs confirmation. The 20-evaluation budget
+  trades some optimizer convergence for bounded latency.
+- Delta Wi-Fi crosses different AP BSSIDs and still shows short rate variation.
+  Power-save-off survived the live run but has not yet been reboot-accepted on both
+  devices.
+- DataCollector remained disabled/read-only and was not part of this acceptance.
+
 ## 2026-08-12 - Merge the latest RDK instructions and record field-verified direct control
 
 Base and branch:

@@ -159,6 +159,29 @@ class Hand2JointStateMappingTest(unittest.TestCase):
 
         np.testing.assert_array_equal(backend.latest_positions(), newer_expected)
 
+    def test_latest_positions_ignores_transient_incomplete_feedback(self):
+        valid_expected = np.arange(20, dtype=np.float64)
+        valid = SimpleNamespace(
+            joints=[
+                SimpleNamespace(nid=nid, position=position)
+                for nid, position in zip(self.NIDS, valid_expected)
+            ]
+        )
+        incomplete = SimpleNamespace(joints=[])
+
+        class FakeSubscription:
+            def __init__(self):
+                self.frames = [valid, incomplete]
+
+            def recv(self):
+                return self.frames.pop(0) if self.frames else None
+
+        backend = object.__new__(WujiHand2Backend)
+        backend._joint_state_sub = FakeSubscription()
+
+        np.testing.assert_array_equal(backend.latest_positions(), valid_expected)
+        self.assertEqual(backend._invalid_feedback_frames, 1)
+
     def test_read_only_close_does_not_disable_device(self):
         calls = []
 

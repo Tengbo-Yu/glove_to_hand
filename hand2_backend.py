@@ -73,6 +73,7 @@ class WujiHand2Backend:
         self._hand = None
         self._publisher = None
         self._joint_state_sub = None
+        self._invalid_feedback_frames = 0
         self._enabled = False
         self._last_command = None
 
@@ -210,18 +211,36 @@ class WujiHand2Backend:
         return positions
 
     def latest_positions(self) -> Optional[np.ndarray]:
-        """Return the newest non-blocking joint feedback, or None if unavailable."""
+        """Return the newest valid non-blocking feedback, or None if unavailable.
+
+        The SDK can transiently emit an empty/incomplete joint-state frame. Live
+        feedback is optional telemetry, so discard such a frame instead of
+        terminating an otherwise healthy command session. ``current_positions``
+        remains strict for the pre-enable safety check.
+        """
         if getattr(self, "_joint_state_sub", None) is None:
             self._joint_state_sub = self._hand.joint_states().subscribe()
         frame = self._joint_state_sub.recv()
         if frame is None:
             return None
+        latest_valid = None
         while True:
+            try:
+                latest_valid = self._positions_from_frame(frame)
+            except RuntimeError as exc:
+                invalid_count = getattr(self, "_invalid_feedback_frames", 0) + 1
+                self._invalid_feedback_frames = invalid_count
+                if invalid_count == 1 or invalid_count % 100 == 0:
+                    print(
+                        "Ignoring invalid Hand 2 feedback frame "
+                        f"(count={invalid_count}): {exc}",
+                        flush=True,
+                    )
             newer = self._joint_state_sub.recv()
             if newer is None:
                 break
             frame = newer
-        return self._positions_from_frame(frame)
+        return latest_valid
 
     def _set_with_retry(self, label: str, setter, attempts: int = 3):
         last_error = None

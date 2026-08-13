@@ -1,5 +1,7 @@
 # Glove to Wuji Hand2
 
+日常完整启动、验收和停止流程见 [WUJI_HAND_TELEOP_SOP.md](WUJI_HAND_TELEOP_SOP.md)。
+
 ## 当前真机链路
 
 2026-08-12 已在双手套、RDK X5、Unitree 和两只 Wuji Hand2 上完成实际控制与
