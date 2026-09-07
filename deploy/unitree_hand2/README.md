@@ -23,15 +23,22 @@ Target-specific deployment for `unitree@192.168.123.164`.
 
 The service process is ready at boot, but the hardware remains disabled until
 that side receives its first valid, non-zero, side-matched command frame.  A
-hello-only connection is not enough to enable the hand.  A one-second command
+hello-only connection is not enough to enable the hand.  A three-second command
 watchdog disables the hand when fresh commands stop.
 
-## Current target mapping
+## Current target mapping (239 / 2026-09-07)
 
-- left: `WH2JA01260717002`, `192.168.1.110:7447`
+- left: `WH2JA01260721003`, `192.168.1.110:7447`
 - right: `WH2KA01260730030`, `192.168.1.111:7447`
-- `KP=3.5`, `KD=0.1`, current limit `1.5 A`
+- `KP=6`, `KD=0.2`, current limit `1.5 A`
 - control `200 Hz`, smoothing `0.02 s`, slew limit `6 rad/s`
+
+The current runtime uses Wuji SDK `2026.8.31`, `COMMAND_TIMEOUT=3.0`,
+`RETARGET_MAXEVAL=20`, and `DATA_COLLECTOR_HOST=10.1.10.239`.
+Command/state telemetry is sampled independently at 30 Hz by default; state
+telemetry is emitted only when fresh measured feedback is available.
+See [LIVE_SYNC_20260907.md](LIVE_SYNC_20260907.md) for the source comparison
+and the target-specific DeltaCollect configuration guard.
 
 ## Operations
 

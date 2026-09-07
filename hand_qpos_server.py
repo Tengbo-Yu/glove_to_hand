@@ -294,6 +294,7 @@ def parse_args():
     parser.add_argument("--telemetry", action=argparse.BooleanOptionalAction, default=True, help="Publish Hand 2 command/state telemetry to Hammerhead DataCollector.")
     parser.add_argument("--hand-command-telemetry", action=argparse.BooleanOptionalAction, default=True, help="Publish accepted and applied Hand 2 commands.")
     parser.add_argument("--hand-state-telemetry", action=argparse.BooleanOptionalAction, default=True, help="Publish measured Hand 2 joint positions.")
+    parser.add_argument("--telemetry-rate", type=float, default=30.0, help="Fixed DataCollector command/state sample rate in Hz, independent of retarget completion.")
     parser.add_argument("--telemetry-host", default=os.environ.get("DATA_COLLECTOR_HOST", "127.0.0.1"), help="DataCollector host for side-specific default endpoints.")
     parser.add_argument("--hand-command-telemetry-endpoint", default=None, help="Explicit command endpoint; overrides --telemetry-host.")
     parser.add_argument("--hand-state-telemetry-endpoint", default=None, help="Explicit state endpoint; overrides --telemetry-host.")
@@ -349,6 +350,10 @@ def build_hand_command_payload(
     server_command_timestamp_ns,
     retarget_config,
     telemetry_dropped_count,
+    telemetry_sequence=None,
+    target_updated=True,
+    target_age_ms=0.0,
+    controller_tick=None,
 ):
     payload = {
         "schema": "wuji_hand_command.hand2.v2",
@@ -377,6 +382,14 @@ def build_hand_command_payload(
         "apply_timestamp_ns": apply_timestamp_ns,
         "server_command_timestamp_ns": int(server_command_timestamp_ns),
         "telemetry_dropped_count": int(telemetry_dropped_count),
+        "telemetry_sequence": int(
+            message["seq"] if telemetry_sequence is None else telemetry_sequence
+        ),
+        "target_updated": bool(target_updated),
+        "target_age_ms": max(0.0, float(target_age_ms)),
+        "controller_tick": (
+            None if controller_tick is None else int(controller_tick)
+        ),
         "applied_qpos_5x4": None,
         "applied_qpos_flat20": None,
     }
@@ -407,6 +420,11 @@ def build_hand_state_payload(
     current_limit,
     enable_hand,
     telemetry_dropped_count,
+    telemetry_sequence=None,
+    glove_seq=None,
+    target_updated=True,
+    target_age_ms=0.0,
+    controller_tick=None,
 ):
     payload = {
         "schema": "wuji_hand_state.hand2.v2",
@@ -431,6 +449,15 @@ def build_hand_state_payload(
         "actual_effort_5x4": None,
         "actual_effort_flat20": None,
         "telemetry_dropped_count": int(telemetry_dropped_count),
+        "telemetry_sequence": (
+            None if telemetry_sequence is None else int(telemetry_sequence)
+        ),
+        "glove_seq": None if glove_seq is None else int(glove_seq),
+        "target_updated": bool(target_updated),
+        "target_age_ms": max(0.0, float(target_age_ms)),
+        "controller_tick": (
+            None if controller_tick is None else int(controller_tick)
+        ),
     }
     payload.update(qpos_fields("target_qpos", target_qpos))
     if applied_qpos is not None:
@@ -665,8 +692,11 @@ def serve_connection(conn, peer, args, stop_requested):
         )
 
         control_interval = 1.0 / max(args.control_rate, 1.0)
+        telemetry_rate = max(float(getattr(args, "telemetry_rate", 30.0)), 1.0)
+        telemetry_interval = 1.0 / telemetry_rate
         deadline = None if args.duration <= 0 else time.monotonic() + args.duration
         next_tick = time.monotonic()
+        next_telemetry_tick = next_tick
         last_tick = next_tick
         last_version = -1
         last_seq = None
@@ -676,6 +706,13 @@ def serve_connection(conn, peer, args, stop_requested):
         last_qpos = None
         latest_feedback = None
         latest_feedback_timestamp_ns = None
+        latest_target_message = None
+        latest_target_dropped_socket = 0
+        latest_target_seq_gap = 0
+        latest_target_updated_perf = None
+        last_published_target_seq = None
+        telemetry_sequence = 0
+        controller_tick = 0
         smoother = QposSmoother(
             tau=args.smooth_tau,
             max_velocity=args.max_joint_velocity,
@@ -810,6 +847,10 @@ def serve_connection(conn, peer, args, stop_requested):
                 server_queue_ms = completed_result["server_queue_ms"]
                 wire_age_ms = completed_result["wire_age_ms"]
                 read_metrics = completed_result["read_metrics"]
+                latest_target_message = target_message
+                latest_target_dropped_socket = target_dropped_socket
+                latest_target_seq_gap = target_seq_gap
+                latest_target_updated_perf = time.monotonic()
                 stats.add("retarget_ms", retarget_ms)
                 stats.add("retarget_queue_ms", completed_result["retarget_queue_ms"])
                 stats.add("server_frame_ms", frame_ms)
@@ -872,8 +913,19 @@ def serve_connection(conn, peer, args, stop_requested):
                 hand_write_ms = (time.perf_counter() - hand_start) * 1000.0
                 if args.debug_latency:
                     stats.add("thumb_j4_target", command_qpos[0, 3])
+            controller_tick += 1
             feedback_fresh = False
-            if target_message is not None and backend is not None:
+            telemetry_now = time.monotonic()
+            telemetry_due = (
+                latest_target_message is not None
+                and command_qpos is not None
+                and telemetry_now >= next_telemetry_tick
+            )
+            if telemetry_due:
+                next_telemetry_tick += telemetry_interval
+                if telemetry_now - next_telemetry_tick > telemetry_interval:
+                    next_telemetry_tick = telemetry_now + telemetry_interval
+            if telemetry_due and backend is not None:
                 feedback = backend.latest_positions()
                 if feedback is not None:
                     latest_feedback = feedback.reshape(5, 4)
@@ -882,12 +934,22 @@ def serve_connection(conn, peer, args, stop_requested):
                     if args.debug_latency:
                         stats.add("thumb_j4_feedback", latest_feedback[0, 3])
 
-            if target_message is not None:
+            if telemetry_due:
+                target_message = latest_target_message
+                target_updated = target_message["seq"] != last_published_target_seq
+                target_age_ms = max(
+                    0.0,
+                    (telemetry_now - latest_target_updated_perf) * 1000.0,
+                )
+                per_sample_dropped_socket = (
+                    latest_target_dropped_socket if target_updated else 0
+                )
+                per_sample_seq_gap = latest_target_seq_gap if target_updated else 0
                 server_command_timestamp_ns = hand_apply_timestamp_ns or time.time_ns()
                 apply_timestamp_ns = hand_apply_timestamp_ns
                 if command_telemetry is not None:
                     command_telemetry.publish(
-                        sequence=target_message["seq"],
+                        sequence=telemetry_sequence,
                         source_timestamp_ns=server_command_timestamp_ns,
                         payload=build_hand_command_payload(
                             hand_side=args.hand,
@@ -895,28 +957,31 @@ def serve_connection(conn, peer, args, stop_requested):
                             target_qpos=last_qpos,
                             applied_qpos=command_qpos,
                             peer=peer,
-                            dropped_socket=target_dropped_socket,
+                            dropped_socket=per_sample_dropped_socket,
                             dropped_socket_total=dropped_socket_total,
-                            seq_gap=target_seq_gap,
+                            seq_gap=per_sample_seq_gap,
                             enable_hand=args.enable_hand,
                             applied_to_hand=backend is not None and command_qpos is not None,
                             apply_timestamp_ns=apply_timestamp_ns,
                             server_command_timestamp_ns=server_command_timestamp_ns,
                             retarget_config=pipeline.config_path,
                             telemetry_dropped_count=command_telemetry.dropped_count,
+                            telemetry_sequence=telemetry_sequence,
+                            target_updated=target_updated,
+                            target_age_ms=target_age_ms,
+                            controller_tick=controller_tick,
                         ),
                     )
-                if state_telemetry is not None:
-                    state_timestamp_ns = (
-                        latest_feedback_timestamp_ns
-                        or apply_timestamp_ns
-                        or server_command_timestamp_ns
-                    )
+                # State telemetry represents a measured controller sample. Do
+                # not fabricate fresh state from a retained position: skipping
+                # it makes the DataCollector gap/sequence gate fail closed.
+                if state_telemetry is not None and feedback_fresh:
+                    state_timestamp_ns = latest_feedback_timestamp_ns
                     hand_serial = (
                         backend.serial_number if backend is not None else args.hand_sn
                     )
                     state_telemetry.publish(
-                        sequence=target_message["seq"],
+                        sequence=telemetry_sequence,
                         source_timestamp_ns=state_timestamp_ns,
                         payload=build_hand_state_payload(
                             hand_side=args.hand,
@@ -931,8 +996,15 @@ def serve_connection(conn, peer, args, stop_requested):
                             current_limit=args.current_limit,
                             enable_hand=args.enable_hand,
                             telemetry_dropped_count=state_telemetry.dropped_count,
+                            telemetry_sequence=telemetry_sequence,
+                            glove_seq=target_message["seq"],
+                            target_updated=target_updated,
+                            target_age_ms=target_age_ms,
+                            controller_tick=controller_tick,
                         ),
                     )
+                last_published_target_seq = target_message["seq"]
+                telemetry_sequence += 1
             stats.add("hand_write_ms", hand_write_ms)
             stats.inc("control_ticks")
 

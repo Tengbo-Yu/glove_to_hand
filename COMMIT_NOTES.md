@@ -4,6 +4,25 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-09-07 - Sync the running 239 Unitree Hand2 implementation
+
+- Base: `data_collect_hand2@8bd7039`; source: running left/right containers on
+  Unitree `192.168.123.164`, accessed through PC `10.1.10.239` (read-only).
+- Import the live `hand_qpos_server.py` byte-for-byte: independent 30 Hz
+  telemetry and fresh-feedback-only state publication. Retain matching backend,
+  retarget code and the more complete local regression tests.
+- Copy the actual target env; update the SDK lock to `2026.8.31`, example
+  profile and deployment documentation. Document the external DeltaCollect
+  configuration guard without introducing a dependency in the base service.
+- Add a hardware-free regression test for repeated telemetry from one target,
+  independent sequences, fresh-state-only publication and faster control output.
+- Validation: 29 focused tests passed. Four retarget tests require missing
+  `nlopt`; MCAP replay module requires missing `mcap`. No hardware acceptance,
+  image rebuild or installation was performed.
+- Exact source paths/hash and deployment boundaries:
+  `deploy/unitree_hand2/LIVE_SYNC_20260907.md`.
+- No remote writes, restarts, git commit or push.
+
 ## 2026-08-13 - Smooth robot-side Hand2 retargeting and harden the live path
 
 Base and branch:

@@ -1,3 +1,6 @@
+> 2026-09-07：239 所连 Unitree 的当前镜像、SDK、参数及源码同步记录见
+> [LIVE_SYNC_20260907.md](LIVE_SYNC_20260907.md)。下文的 8 月验收记录属于历史现场。
+
 # Unitree 双 Wuji Hand2 真机服务部署 SOP
 
 本文用于在 `unitree@192.168.123.164` 上部署本仓库的左右 Hand2 命令服务。
@@ -67,7 +70,7 @@ sudo docker image inspect codex/xrobotoolkit-runtime:jammy --format '{{.Id}}'
 ```
 
 部署依赖目标机已有 `codex/xrobotoolkit-runtime:jammy`。宿主是 Ubuntu 20.04、
-glibc 2.31，而 `wuji-sdk 2026.8.3` 需要更新的 glibc，因此不要把 SDK 直接装进
+glibc 2.31，而 `wuji-sdk 2026.8.31` 需要更新的 glibc，因此不要把 SDK 直接装进
 宿主 Python；服务使用 Ubuntu 22.04 容器隔离运行。
 
 如目标机下载慢，先在开发机准备 wheel 和模型，再一次性传输；不要让

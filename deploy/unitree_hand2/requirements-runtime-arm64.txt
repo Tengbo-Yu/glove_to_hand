@@ -4,7 +4,7 @@
 pip==25.2
 numpy==2.2.6
 packaging==26.0
-wuji-sdk==2026.8.3
+wuji-sdk==2026.8.31
 pin==3.8.0
 cmeel==0.60.1
 tomli==2.2.1

@@ -2,7 +2,7 @@ FROM codex/xrobotoolkit-runtime:jammy
 
 # The base image is already present on the Unitree ARM64 host.  Keep all Python
 # dependencies offline and pinned because the host itself runs Ubuntu 20.04
-# (glibc 2.31), while wuji-sdk 2026.8.3 requires glibc 2.34 or newer.
+# (glibc 2.31), while wuji-sdk 2026.8.31 requires glibc 2.34 or newer.
 COPY wheelhouse/ /opt/hand2-wheelhouse/
 RUN PYTHONPATH=/opt/hand2-wheelhouse/pip-25.2-py3-none-any.whl \
     python3 -m pip install --no-index \
