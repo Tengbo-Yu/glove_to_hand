@@ -4,6 +4,22 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-09-08 - Make robot telemetry destination PC-independent
+
+- Base: d8d3ebf9728429cb4b2658b539206c0f71fdc8eb.
+- Scope: unitree_hand2 field and example env defaults plus transport/deployment
+  documentation. Change only telemetry host to127.0.0.1; reuse the PC's existing
+  authenticated reverse SSH tunnel. No image/SDK/control/hand SN/gain changes.
+- Preserve existing wire format and nonblocking PUSH behavior. Only hand
+  command/state6013–6016 are covered; separate glove publishers are not changed.
+- Validation:6 hardware-free telemetry tests passed; real isolated26014 tunnel
+  test passed with byte-identical multipart payload and timestamp, no production
+  data injection and no hand command. Git diff check passed before commit.
+- Deployment is prepared, not activated: sudo credentials on both machines are
+  required. Exact current env and service source have been backed up separately.
+  Rollback restores env, its guard entry and prior service states.
+- Intended subject: fix(hand2): use PC-initiated telemetry tunnel by default.
+
 ## 2026-09-07 - Sync the running 239 Unitree Hand2 implementation
 
 - Base: `data_collect_hand2@8bd7039`; source: running left/right containers on
