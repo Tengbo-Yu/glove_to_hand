@@ -4,6 +4,16 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-09-08 - Record completed PC-initiated telemetry switch
+
+- Base:7a5ba0d; intended subject: docs(hand2): record verified telemetry switch.
+- Documentation only:239 tunnel activated; onboard env and matching guard entry
+  updated. Both original active idle hand services restarted without motion.
+- Validation:4 real end-to-end ZMTP handshakes passed without data injection;
+  runtime image/SN/kp/kd unchanged; collector PID unchanged; tunnel uses wired
+ 192.168.123.138 ->192.168.123.164. Backup/rollback artifacts are retained.
+- No other runtime changes in this documentation commit; hardware acceptance pending.
+
 ## 2026-09-08 - Make robot telemetry destination PC-independent
 
 - Base: d8d3ebf9728429cb4b2658b539206c0f71fdc8eb.

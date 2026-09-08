@@ -63,4 +63,8 @@ files until after real collection acceptance.
 Field evidence and prepared transaction scripts are stored at:
 /home/descfly/Documents/Codex/2026-09-08/wuji-pc-initiated-telemetry
 
-Preparation is complete; field activation requires sudo on both machines.
+Field activation completed on2026-09-08: the239 system tunnel is active/enabled,
+robot containers use127.0.0.1, and only the env entry changed in accepted-config.
+All four live ports passed end-to-end ZMTP handshake without sending payloads.
+Collector PID was preserved; image/SN/kp/kd were verified unchanged.
+Real hand-motion/fresh-telemetry acceptance has not been performed.
