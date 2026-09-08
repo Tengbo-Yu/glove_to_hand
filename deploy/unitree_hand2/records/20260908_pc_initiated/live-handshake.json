@@ -1,0 +1,42 @@
+[
+  {
+    "port": 6013,
+    "end_to_end_zmtp_handshake": true,
+    "events": [
+      2,
+      1,
+      4096
+    ],
+    "data_messages_sent": 0
+  },
+  {
+    "port": 6014,
+    "end_to_end_zmtp_handshake": true,
+    "events": [
+      2,
+      1,
+      4096
+    ],
+    "data_messages_sent": 0
+  },
+  {
+    "port": 6015,
+    "end_to_end_zmtp_handshake": true,
+    "events": [
+      2,
+      1,
+      4096
+    ],
+    "data_messages_sent": 0
+  },
+  {
+    "port": 6016,
+    "end_to_end_zmtp_handshake": true,
+    "events": [
+      2,
+      1,
+      4096
+    ],
+    "data_messages_sent": 0
+  }
+]

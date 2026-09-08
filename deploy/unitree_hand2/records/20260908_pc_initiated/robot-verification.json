@@ -1,0 +1,27 @@
+{
+  "env_only_change": "DATA_COLLECTOR_HOST:10.1.10.239 ->127.0.0.1",
+  "accepted_config_changed_paths": [
+    "/etc/default/wuji-hand2"
+  ],
+  "containers": [
+    {
+      "side": "left",
+      "running": true,
+      "image": "sha256:2e29e35a5f3cee5b33b9056d0502e562da322a302d5ce4a88eceadf88ea420c4",
+      "telemetry_host": "127.0.0.1",
+      "kp": 6,
+      "kd": 0.2,
+      "hand_sn": "WH2JA01260721003"
+    },
+    {
+      "side": "right",
+      "running": true,
+      "image": "sha256:2e29e35a5f3cee5b33b9056d0502e562da322a302d5ce4a88eceadf88ea420c4",
+      "telemetry_host": "127.0.0.1",
+      "kp": 6,
+      "kd": 0.2,
+      "hand_sn": "WH2KA01260730030"
+    }
+  ],
+  "hand_control_connections": ""
+}

@@ -1,0 +1,3 @@
+{"existing_adapter_passed": true, "robot_profile_and_ssh_key_verified": true, "remote_loopback_ports": [6013, 6014, 6015, 6016], "commands_sent": false}
+2026-09-08 15:57:00,041 INFO deltacollect.robot_hand_adapter: opening Wuji telemetry tunnel for jetson-1794225001823 ports=[6013, 6014, 6015, 6016]
+2026-09-08 15:57:00,872 INFO deltacollect.robot_hand_adapter: received signal 2

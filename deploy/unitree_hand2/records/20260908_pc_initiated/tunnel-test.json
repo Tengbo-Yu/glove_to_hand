@@ -1,0 +1,1 @@
+{"passed": true, "path": "robot loopback26014 -> PC-initiated SSH to192.168.123.164 -> PC loopback26014", "parts": 2, "sha256": "8c4b677d3d634dda80d0f2e31ff819c4ca0ada5dca48c2a7f505fa91483d7a31", "production_ports_used": false, "hardware_commands_sent": false}

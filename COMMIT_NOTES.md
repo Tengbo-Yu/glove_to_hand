@@ -4,6 +4,23 @@ This file is the pre-commit change log for this repository. Keep entries in
 reverse chronological order and record scope, runtime effects, validation, and
 known limitations before each commit.
 
+## 2026-09-08 - Archive deployment provenance and publish the scoped branch
+
+- Base:07d06ef. Intended subject: docs(hand2): archive PC-initiated telemetry deployment and tests.
+- Scope:records/20260908_pc_initiated plus this log and overview link. Archive
+  exact executed apply/rollback/preflight/verification helpers, three transport
+  probes, selected results and source hashes; detailed Chinese deployment record.
+- Only glove_to_hand changed. Existing teleoperation adapter/service reused;
+  DataCollector/G1_deploy/SOMA source and the earlier fleet candidate untouched.
+- No credentials, private keys or raw accepted-config/source backups included.
+- Compatibility:one PC owns remote loopback forwards; RDK raw gloves and
+  single-right-hand recording policy excluded. Real motion/MCAP/reconnect and
+  production rollback remain untested. Source publication performs no deployment.
+- Validation:recorded6 unit tests and real transport checks retained; archived
+  Python syntax, artifact SHA256 and staged diff/secret checks run before commit.
+- User explicitly authorized pushing this feature branch toorigin; no merge or
+  default-branch update included. Prior functional/deployment commits preserved.
+
 ## 2026-09-08 - Record completed PC-initiated telemetry switch
 
 - Base:7a5ba0d; intended subject: docs(hand2): record verified telemetry switch.

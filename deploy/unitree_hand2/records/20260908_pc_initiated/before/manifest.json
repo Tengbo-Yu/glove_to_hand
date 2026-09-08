@@ -1,0 +1,37 @@
+[
+  {
+    "host": "pc",
+    "path": "/etc/systemd/system/deltacollect-hand-telemetry-tunnel.service",
+    "sha256": "7c87e4222cdaef723387b325fdabc52d8af3080e496b009e6bc9554aa606dc95"
+  },
+  {
+    "host": "pc",
+    "path": "/etc/default/xrobotoolkit-hammerhead",
+    "sha256": "5bad078acaeef5cfaa66046cec61956c30a23c1b633854de8e5ad0daacc91579"
+  },
+  {
+    "host": "pc",
+    "path": "/usr/local/lib/xrobotoolkit-local/robot_hand_adapter.py",
+    "sha256": "357c5fd4ba3325219bfcb69344ba80b04f7042cfd6c29f3e57a90c85b2ad9ad0"
+  },
+  {
+    "host": "robot",
+    "path": "/etc/default/wuji-hand2",
+    "sha256": "51fad267f3ec6c7ef1b71cd3d0ad24e369e937dfe6dda8fbd61a2151faa6b1ac"
+  },
+  {
+    "host": "robot",
+    "path": "/opt/glove_to_hand/deploy/unitree_hand2/run_hand2_container.sh",
+    "sha256": "a1e9bd830c79311a02def8d2ab5e44a2f4c906a5f59af944d8ca812356c14e5c"
+  },
+  {
+    "host": "robot",
+    "path": "/etc/systemd/system/wuji-hand2@.service",
+    "sha256": "90edae64dea102025b4f2558e1593f324f6ae4393d0e4481ab7a72a3e304dc01"
+  },
+  {
+    "host": "robot",
+    "path": "/usr/local/libexec/deltacollect-config-guard.py",
+    "sha256": "efd78b29561c23c74d4f6997915fd7b68bdc05267f51093f821cd6abf940b676"
+  }
+]
